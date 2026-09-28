@@ -36,9 +36,12 @@ export function serializeAdminUser(row: UserRow): PublicUser & { createdAt: stri
   return { ...serializeUser(row), createdAt: isoTime(row.created_at) };
 }
 
-export function findUser(database: CivicDatabase, id: string): PublicUser | null {
-  const row = database
+export async function findUser(
+  database: CivicDatabase,
+  id: string,
+): Promise<PublicUser | null> {
+  const row = (await database
     .prepare(`${USER_SELECT} WHERE users.id = ?`)
-    .get(id) as UserRow | undefined;
+    .get(id)) as UserRow | undefined;
   return row ? serializeUser(row) : null;
 }

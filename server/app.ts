@@ -1,6 +1,4 @@
 // Composition root: wires middleware, routers, and the error protocol together.
-import { mkdirSync } from "node:fs";
-
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -9,8 +7,9 @@ import helmet from "helmet";
 import multer from "multer";
 import { z } from "zod";
 
-import { openDatabase, type CivicDatabase } from "./database";
+import type { CivicDatabase } from "./database";
 import { ApiError, sendError } from "./http";
+import type { PhotoStore } from "./photo-store";
 import { createAuthRouter } from "./routes/auth";
 import { createCatalogRouter } from "./routes/catalog";
 import { createAdminRouter } from "./routes/admin";
@@ -21,22 +20,33 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_SESSION_TTL_DAYS = 7;
 
 type AppOptions = {
-  databasePath: string;
-  uploadDirectory: string;
+  database: CivicDatabase;
+  photos: PhotoStore;
   secureCookies?: boolean;
   sessionTtlDays?: number;
 };
 
 export function createApp(options: AppOptions) {
-  mkdirSync(options.uploadDirectory, { recursive: true });
-  const database = openDatabase(options.databasePath);
+  const { database, photos } = options;
   const secureCookies = options.secureCookies ?? process.env.NODE_ENV === "production";
   const sessionDurationMs =
     (options.sessionTtlDays ?? DEFAULT_SESSION_TTL_DAYS) * DAY_MS;
   const app = express();
 
   app.disable("x-powered-by");
-  app.use(helmet());
+  // Behind a platform proxy (Vercel) trust the first hop so secure cookies
+  // and the rate limiter see the real client over x-forwarded-*.
+  if (process.env.VERCEL) {
+    app.set("trust proxy", 1);
+  }
+  // Photo attachments may be served from an external blob store in production.
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: { imgSrc: ["'self'", "data:", "https:"] },
+      },
+    }),
+  );
   app.use(compression());
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
@@ -57,11 +67,13 @@ export function createApp(options: AppOptions) {
   );
   app.use(
     "/api/reports",
-    createReportsRouter({ database, uploadDirectory: options.uploadDirectory }),
+    createReportsRouter({ database, photos }),
   );
   app.use("/api/notifications", createNotificationsRouter({ database }));
   app.use("/api/admin", createAdminRouter({ database }));
-  app.use("/uploads", express.static(options.uploadDirectory));
+  if (photos.staticHandler) {
+    app.use("/uploads", photos.staticHandler);
+  }
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
     if (error instanceof ApiError) {
@@ -94,8 +106,8 @@ export function createApp(options: AppOptions) {
 
   return {
     app,
-    close(): void {
-      database.close();
+    async close(): Promise<void> {
+      await database.close();
     },
   };
 }

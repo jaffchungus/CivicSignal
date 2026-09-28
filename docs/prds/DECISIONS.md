@@ -34,6 +34,14 @@ This log is the source of truth for product and architecture decisions that affe
 - **Reason:** Even apparently reversible scaffolding would encode unsupported technical and product choices.
 - **Affected PRDs:** `00-project-context.md`, `01-architecture.md`, and all future functional PRDs.
 
+## D-005 — Production runs on Vercel with external data and photo storage
+
+- **Status:** Accepted
+- **Decision:** Production deployments run CivicSignal as a single serverless Express function (`api/index.ts`) on Vercel, with Postgres (e.g. Neon via `DATABASE_URL`) as the database and Vercel Blob for photo attachments. Local development and tests keep SQLite and on-disk photos through the same `CivicDatabase` and `PhotoStore` seams, and all SQL stays within the shared SQLite/Postgres subset.
+- **Context:** Vercel Functions have no persistent filesystem, so the SQLite-on-disk data layer and local upload directory cannot survive deploys or instance recycling. The previous deployment also served the wrong output root (`dist/` instead of `dist/client`), so `/` returned the platform 404.
+- **Reason:** Externalizing state makes the app deployable on serverless hosting without changing any product behavior; keeping both drivers behind one seam preserves the zero-infrastructure local workflow and the existing test suite. Known trade-offs: the in-memory rate limiter is per-instance, and Vercel's 4.5 MB request-body cap binds below the 5 MB attachment limit in production.
+- **Affected PRDs:** `01-architecture.md`.
+
 ## Unresolved decisions requiring source material
 
 The following are deliberately unresolved rather than silently assumed:

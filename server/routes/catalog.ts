@@ -10,15 +10,15 @@ export function createCatalogRouter(deps: { database: CivicDatabase }): Router {
   const { database } = deps;
   const router = Router();
 
-  router.get("/organizations", (_request, response) => {
-    const organizations = database
+  router.get("/organizations", async (_request, response) => {
+    const organizations = (await database
       .prepare("SELECT id, name, kind FROM organizations WHERE active = 1 ORDER BY name")
-      .all() as Array<{ id: string; name: string; kind: OrganizationKind }>;
+      .all()) as Array<{ id: string; name: string; kind: OrganizationKind }>;
     response.json({ organizations });
   });
 
-  router.get("/categories", authenticate(database), (_request, response) => {
-    const categories = database
+  router.get("/categories", authenticate(database), async (_request, response) => {
+    const categories = await database
       .prepare(
         `SELECT categories.id, categories.name, categories.description,
                 categories.organization_id AS organizationId,

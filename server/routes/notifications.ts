@@ -32,27 +32,27 @@ export function createNotificationsRouter(deps: {
     };
   }
 
-  router.get("/", authenticate(database), (request, response) => {
+  router.get("/", authenticate(database), async (request, response) => {
     const user = currentUser(request);
-    const rows = database
+    const rows = (await database
       .prepare(
         `SELECT id, type, title, message, read_at, created_at, report_id
          FROM notifications WHERE user_id = ?
          ORDER BY created_at DESC LIMIT 50`,
       )
-      .all(user.id) as NotificationRow[];
-    const { unreadCount } = database
+      .all(user.id)) as NotificationRow[];
+    const { unreadCount } = (await database
       .prepare(
         "SELECT COUNT(*) AS unreadCount FROM notifications WHERE user_id = ? AND read_at IS NULL",
       )
-      .get(user.id) as { unreadCount: number };
+      .get(user.id)) as { unreadCount: number };
 
     response.json({ notifications: rows.map(serialize), unreadCount });
   });
 
-  router.post("/:notificationId/read", authenticate(database), (request, response) => {
+  router.post("/:notificationId/read", authenticate(database), async (request, response) => {
     const user = currentUser(request);
-    const owned = database
+    const owned = await database
       .prepare("SELECT id FROM notifications WHERE id = ? AND user_id = ?")
       .get(request.params.notificationId, user.id);
     if (!owned) {
@@ -62,7 +62,7 @@ export function createNotificationsRouter(deps: {
         "This notification does not exist.",
       );
     }
-    database
+    await database
       .prepare(
         "UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL",
       )
@@ -70,9 +70,9 @@ export function createNotificationsRouter(deps: {
     response.status(204).end();
   });
 
-  router.post("/read-all", authenticate(database), (request, response) => {
+  router.post("/read-all", authenticate(database), async (request, response) => {
     const user = currentUser(request);
-    database
+    await database
       .prepare("UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL")
       .run(Date.now(), user.id);
     response.status(204).end();

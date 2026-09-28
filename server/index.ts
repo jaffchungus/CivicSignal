@@ -1,9 +1,13 @@
+// Local/standalone entry: SQLite on disk, photos on disk, serves the built
+// client. Production on Vercel uses api/index.ts instead.
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 import express from "express";
 
 import { createApp } from "./app";
+import { createSqliteDatabase } from "./database-sqlite";
+import { DiskPhotoStore } from "./photo-store";
 
 const port = Number(process.env.PORT ?? 3001);
 const databasePath = process.env.DATABASE_PATH ?? "./data/civicsignal.db";
@@ -15,11 +19,9 @@ const clientDirectory = path.resolve(
 
 mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
 
-const { app, close } = createApp({
-  databasePath,
-  uploadDirectory,
-  sessionTtlDays,
-});
+const database = await createSqliteDatabase(databasePath);
+const photos = new DiskPhotoStore(uploadDirectory);
+const { app, close } = createApp({ database, photos, sessionTtlDays });
 
 app.use(express.static(clientDirectory));
 app.use((request, response, next) => {
@@ -44,8 +46,9 @@ const server = app.listen(port, () => {
 
 function shutdown(): void {
   server.close(() => {
-    close();
-    process.exit(0);
+    void close().then(() => {
+      process.exit(0);
+    });
   });
 }
 

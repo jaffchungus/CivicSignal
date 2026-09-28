@@ -24,29 +24,29 @@ function sessionHash(token: string): string {
 }
 
 /** Resolves the active user behind a session token, or null. */
-export function userForSessionToken(
+export async function userForSessionToken(
   database: CivicDatabase,
   token: string,
-): PublicUser | null {
-  const session = database
+): Promise<PublicUser | null> {
+  const session = (await database
     .prepare(
       `SELECT user_id AS userId FROM sessions
        WHERE token_hash = ? AND expires_at > ?`,
     )
-    .get(sessionHash(token), Date.now()) as { userId: string } | undefined;
+    .get(sessionHash(token), Date.now())) as { userId: string } | undefined;
   return session ? findUser(database, session.userId) : null;
 }
 
-export function createSession(
+export async function createSession(
   database: CivicDatabase,
   response: Response,
   userId: string,
   secureCookies: boolean,
   sessionDurationMs: number,
-): void {
+): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const now = Date.now();
-  database
+  await database
     .prepare(
       "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
     )
@@ -60,45 +60,49 @@ export function createSession(
   });
 }
 
-export function destroySession(
+export async function destroySession(
   database: CivicDatabase,
   request: Request,
   response: Response,
-): void {
+): Promise<void> {
   const token = request.cookies?.[SESSION_COOKIE] as string | undefined;
   if (token) {
-    database.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sessionHash(token));
+    await database.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sessionHash(token));
   }
   response.clearCookie(SESSION_COOKIE, { path: "/" });
 }
 
 /** Resolves the session user and rejects unauthenticated or inactive accounts. */
 export function authenticate(database: CivicDatabase): RequestHandler {
-  return (request, _response, next) => {
-    const token = request.cookies?.[SESSION_COOKIE] as string | undefined;
-    if (!token) {
-      next(new ApiError(401, "AUTH_REQUIRED", "Sign in to continue."));
-      return;
+  return async (request, _response, next) => {
+    try {
+      const token = request.cookies?.[SESSION_COOKIE] as string | undefined;
+      if (!token) {
+        next(new ApiError(401, "AUTH_REQUIRED", "Sign in to continue."));
+        return;
+      }
+      const user = await userForSessionToken(database, token);
+      if (!user) {
+        next(new ApiError(401, "AUTH_REQUIRED", "Sign in to continue."));
+        return;
+      }
+      if (user.status !== "ACTIVE") {
+        next(
+          new ApiError(
+            403,
+            "ACCOUNT_NOT_ACTIVE",
+            user.status === "PENDING"
+              ? "This account is awaiting administrator verification."
+              : "This account has been suspended.",
+          ),
+        );
+        return;
+      }
+      request.authUser = user;
+      next();
+    } catch (error) {
+      next(error);
     }
-    const user = userForSessionToken(database, token);
-    if (!user) {
-      next(new ApiError(401, "AUTH_REQUIRED", "Sign in to continue."));
-      return;
-    }
-    if (user.status !== "ACTIVE") {
-      next(
-        new ApiError(
-          403,
-          "ACCOUNT_NOT_ACTIVE",
-          user.status === "PENDING"
-            ? "This account is awaiting administrator verification."
-            : "This account has been suspended.",
-        ),
-      );
-      return;
-    }
-    request.authUser = user;
-    next();
   };
 }
 

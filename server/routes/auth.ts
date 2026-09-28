@@ -83,8 +83,8 @@ export function createAuthRouter(deps: {
   const { database, secureCookies, sessionDurationMs } = deps;
   const router = Router();
 
-  router.get("/setup/status", (_request, response) => {
-    const row = database.prepare("SELECT COUNT(*) AS count FROM users").get() as {
+  router.get("/setup/status", async (_request, response) => {
+    const row = (await database.prepare("SELECT COUNT(*) AS count FROM users").get()) as {
       count: number;
     };
     response.json({ setupRequired: row.count === 0 });
@@ -97,15 +97,15 @@ export function createAuthRouter(deps: {
       const now = Date.now();
       const adminId = randomUUID();
 
-      const result = database.transaction(() => {
-        const existing = database.prepare("SELECT COUNT(*) AS count FROM users").get() as {
+      const result = await database.transaction(async () => {
+        const existing = (await database.prepare("SELECT COUNT(*) AS count FROM users").get()) as {
           count: number;
         };
         if (existing.count !== 0) {
           return null;
         }
 
-        database
+        await database
           .prepare(
             `INSERT INTO users
               (id, display_name, email, normalized_email, password_hash, role, status,
@@ -123,7 +123,7 @@ export function createAuthRouter(deps: {
             now,
           );
 
-        database
+        await database
           .prepare("INSERT INTO settings (key, value) VALUES ('municipality_name', ?)")
           .run(input.municipalityName);
 
@@ -135,7 +135,7 @@ export function createAuthRouter(deps: {
         for (const organization of DEFAULT_ORGANIZATIONS) {
           const id = randomUUID();
           organizationIds.set(organization.key, id);
-          insertOrganization.run(id, organization.name, organization.kind, now, now);
+          await insertOrganization.run(id, organization.name, organization.kind, now, now);
         }
 
         const insertCategory = database.prepare(
@@ -144,7 +144,7 @@ export function createAuthRouter(deps: {
            VALUES (?, ?, ?, ?, 1, ?, ?)`,
         );
         for (const [name, description, organizationKey] of DEFAULT_CATEGORIES) {
-          insertCategory.run(
+          await insertCategory.run(
             randomUUID(),
             name,
             description,
@@ -154,7 +154,7 @@ export function createAuthRouter(deps: {
           );
         }
 
-        recordAudit(database, {
+        await recordAudit(database, {
           actorUserId: adminId,
           action: "SYSTEM_INITIALIZED",
           targetType: "SYSTEM",
@@ -163,19 +163,19 @@ export function createAuthRouter(deps: {
         });
 
         return adminId;
-      })();
+      });
 
       if (!result) {
         sendError(response, 409, "ALREADY_INITIALIZED", "CivicSignal is already initialized.");
         return;
       }
 
-      createSession(database, response, adminId, secureCookies, sessionDurationMs);
-      const user = findUser(database, adminId);
-      const organizations = database
+      await createSession(database, response, adminId, secureCookies, sessionDurationMs);
+      const user = await findUser(database, adminId);
+      const organizations = (await database
         .prepare(`SELECT id, name, kind, active FROM organizations ORDER BY name`)
-        .all() as Array<{ id: string; name: string; kind: OrganizationKind; active: number }>;
-      const categories = database
+        .all()) as Array<{ id: string; name: string; kind: OrganizationKind; active: number }>;
+      const categories = await database
         .prepare(
           `SELECT categories.id, categories.name, categories.description,
                   categories.organization_id AS organizationId,
@@ -200,9 +200,9 @@ export function createAuthRouter(deps: {
     }
   });
 
-  router.get("/auth/session", (request, response) => {
+  router.get("/auth/session", async (request, response) => {
     const token = request.cookies?.civicsignal_session as string | undefined;
-    const user = token ? userForSessionToken(database, token) : null;
+    const user = token ? await userForSessionToken(database, token) : null;
     response.json({ user });
   });
 
@@ -221,9 +221,9 @@ export function createAuthRouter(deps: {
             { organizationId: ["Select the organization you serve."] },
           );
         }
-        const organization = database
+        const organization = (await database
           .prepare("SELECT id, kind FROM organizations WHERE id = ? AND active = 1")
-          .get(input.organizationId) as
+          .get(input.organizationId)) as
           | { id: string; kind: OrganizationKind }
           | undefined;
         if (!organization || organization.kind !== expectedKind) {
@@ -250,7 +250,7 @@ export function createAuthRouter(deps: {
         );
       }
 
-      const existing = database
+      const existing = await database
         .prepare("SELECT id FROM users WHERE normalized_email = ?")
         .get(normalizedEmail(input.email));
       if (existing) {
@@ -266,7 +266,7 @@ export function createAuthRouter(deps: {
       const userId = randomUUID();
       // Official accounts stay inactive until an administrator verifies them.
       const status = input.role === "RESIDENT" ? "ACTIVE" : "PENDING";
-      database
+      await database
         .prepare(
           `INSERT INTO users
             (id, display_name, email, normalized_email, password_hash, role, status,
@@ -286,8 +286,8 @@ export function createAuthRouter(deps: {
           now,
         );
 
-      createSession(database, response, userId, secureCookies, sessionDurationMs);
-      response.status(201).json({ user: findUser(database, userId) });
+      await createSession(database, response, userId, secureCookies, sessionDurationMs);
+      response.status(201).json({ user: await findUser(database, userId) });
     } catch (error) {
       next(error);
     }
@@ -296,11 +296,11 @@ export function createAuthRouter(deps: {
   router.post("/auth/login", async (request, response, next) => {
     try {
       const input = loginSchema.parse(request.body);
-      const row = database
+      const row = (await database
         .prepare(
           "SELECT id, password_hash, status FROM users WHERE normalized_email = ?",
         )
-        .get(normalizedEmail(input.email)) as
+        .get(normalizedEmail(input.email))) as
         | { id: string; password_hash: string; status: string }
         | undefined;
       const passwordMatches = row
@@ -320,27 +320,27 @@ export function createAuthRouter(deps: {
         return;
       }
 
-      createSession(database, response, row.id, secureCookies, sessionDurationMs);
-      response.json({ user: findUser(database, row.id) });
+      await createSession(database, response, row.id, secureCookies, sessionDurationMs);
+      response.json({ user: await findUser(database, row.id) });
     } catch (error) {
       next(error);
     }
   });
 
-  router.post("/auth/logout", (request, response) => {
-    destroySession(database, request, response);
+  router.post("/auth/logout", async (request, response) => {
+    await destroySession(database, request, response);
     response.status(204).end();
   });
 
-  router.patch("/auth/profile", authenticate(database), (request, response, next) => {
+  router.patch("/auth/profile", authenticate(database), async (request, response, next) => {
     try {
       const user = currentUser(request);
       const input = profileSchema.parse(request.body);
-      database
+      await database
         .prepare("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?")
         .run(input.displayName, Date.now(), user.id);
 
-      recordAudit(database, {
+      await recordAudit(database, {
         actorUserId: user.id,
         action: "PROFILE_UPDATED",
         targetType: "USER",
@@ -348,7 +348,7 @@ export function createAuthRouter(deps: {
         details: { displayName: input.displayName },
       });
 
-      response.json({ user: findUser(database, user.id) });
+      response.json({ user: await findUser(database, user.id) });
     } catch (error) {
       next(error);
     }
@@ -358,9 +358,9 @@ export function createAuthRouter(deps: {
     try {
       const user = currentUser(request);
       const input = passwordChangeSchema.parse(request.body);
-      const row = database
+      const row = (await database
         .prepare("SELECT password_hash FROM users WHERE id = ?")
-        .get(user.id) as { password_hash: string } | undefined;
+        .get(user.id)) as { password_hash: string } | undefined;
       const matches = row
         ? await bcrypt.compare(input.currentPassword, row.password_hash)
         : false;
@@ -375,18 +375,18 @@ export function createAuthRouter(deps: {
       }
 
       const passwordHash = await bcrypt.hash(input.newPassword, 12);
-      database
+      await database
         .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
         .run(passwordHash, Date.now(), user.id);
 
-      recordAudit(database, {
+      await recordAudit(database, {
         actorUserId: user.id,
         action: "PASSWORD_CHANGED",
         targetType: "USER",
         targetId: user.id,
       });
 
-      response.json({ user: findUser(database, user.id) });
+      response.json({ user: await findUser(database, user.id) });
     } catch (error) {
       next(error);
     }

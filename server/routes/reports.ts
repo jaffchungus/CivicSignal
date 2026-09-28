@@ -23,6 +23,7 @@ import {
   recordReportEvent,
 } from "../activity";
 import { ApiError, isoTime, pathId } from "../http";
+import type { PhotoStore } from "../photo-store";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session";
 
 const ATTACHMENT_LIMIT_BYTES = 5 * 1024 * 1024;
@@ -32,7 +33,6 @@ const ALLOWED_IMAGE_TYPES = new Set([
   "image/webp",
   "image/gif",
 ]);
-const ALLOWED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 
 const EVENT_TYPES: Record<string, string> = {
   REPORT_CREATED: "created",
@@ -108,8 +108,8 @@ const moderationSchema = z.object({
   moderationStatus: z.enum(MODERATION_STATUSES),
 });
 
-function loadReport(database: CivicDatabase, id: string): ReportRow {
-  const row = database.prepare(`${REPORT_SELECT} WHERE reports.id = ?`).get(id) as
+async function loadReport(database: CivicDatabase, id: string): Promise<ReportRow> {
+  const row = (await database.prepare(`${REPORT_SELECT} WHERE reports.id = ?`).get(id)) as
     | ReportRow
     | undefined;
   if (!row) {
@@ -186,24 +186,25 @@ function serializeSummary(row: ReportRow) {
   };
 }
 
-function serializeDetail(
+async function serializeDetail(
   database: CivicDatabase,
+  photos: PhotoStore,
   row: ReportRow,
   user: { id: string; role: UserRole; organizationId: string | null },
 ) {
-  const attachments = database
+  const attachments = (await database
     .prepare(
       `SELECT id, filename, stored_name, content_type
        FROM attachments WHERE report_id = ? ORDER BY created_at`,
     )
-    .all(row.id) as Array<{
+    .all(row.id)) as Array<{
     id: string;
     filename: string;
     stored_name: string;
     content_type: string;
   }>;
 
-  const updates = database
+  const updates = (await database
     .prepare(
       `SELECT report_updates.id, report_updates.message, report_updates.created_at,
               users.id AS author_id, users.display_name AS author_display_name,
@@ -213,7 +214,7 @@ function serializeDetail(
        WHERE report_updates.report_id = ?
        ORDER BY report_updates.created_at`,
     )
-    .all(row.id) as Array<{
+    .all(row.id)) as Array<{
     id: string;
     message: string;
     created_at: number;
@@ -222,7 +223,7 @@ function serializeDetail(
     author_role: UserRole | null;
   }>;
 
-  const events = database
+  const events = (await database
     .prepare(
       `SELECT report_events.id, report_events.action, report_events.from_status,
               report_events.to_status, report_events.message, report_events.created_at,
@@ -233,7 +234,7 @@ function serializeDetail(
        WHERE report_events.report_id = ?
        ORDER BY report_events.created_at, report_events.id`,
     )
-    .all(row.id) as Array<{
+    .all(row.id)) as Array<{
     id: string;
     action: string;
     from_status: string | null;
@@ -253,7 +254,7 @@ function serializeDetail(
     attachments: attachments.map((attachment) => ({
       id: attachment.id,
       filename: attachment.filename,
-      url: `/uploads/${attachment.stored_name}`,
+      url: photos.url(attachment.stored_name),
       contentType: attachment.content_type,
     })),
     updates: updates.map((update) => ({
@@ -295,22 +296,22 @@ function serializeDetail(
   };
 }
 
-function nextReferenceCode(database: CivicDatabase): string {
-  const { count } = database
+async function nextReferenceCode(database: CivicDatabase): Promise<string> {
+  const { count } = (await database
     .prepare("SELECT COUNT(*) AS count FROM reports")
-    .get() as { count: number };
+    .get()) as { count: number };
   return `CS-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
 }
 
-function notifyReporterOfReport(
+async function notifyReporterOfReport(
   database: CivicDatabase,
   row: ReportRow,
   type: string,
   title: string,
   message: string,
-): void {
+): Promise<void> {
   if (row.reporter_user_id) {
-    createNotification(database, {
+    await createNotification(database, {
       userId: row.reporter_user_id,
       reportId: row.id,
       type,
@@ -322,26 +323,15 @@ function notifyReporterOfReport(
 
 export function createReportsRouter(deps: {
   database: CivicDatabase;
-  uploadDirectory: string;
+  photos: PhotoStore;
 }): Router {
-  const { database, uploadDirectory } = deps;
+  const { database, photos } = deps;
   const router = Router();
 
+  // Photos are buffered and handed to the photo store only once accepted, so
+  // nothing is written for requests rejected by the file filter or size limit.
   const upload = multer({
-    storage: multer.diskStorage({
-      destination: (_request, _file, callback) => {
-        callback(null, uploadDirectory);
-      },
-      filename: (_request, file, callback) => {
-        const extension = file.originalname.includes(".")
-          ? `.${file.originalname.split(".").pop()?.toLowerCase() ?? ""}`
-          : "";
-        callback(
-          null,
-          `${randomUUID()}${ALLOWED_IMAGE_EXTENSIONS.has(extension) ? extension : ".bin"}`,
-        );
-      },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: ATTACHMENT_LIMIT_BYTES, files: 1 },
     fileFilter: (_request, file, callback) => {
       if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
@@ -358,7 +348,7 @@ export function createReportsRouter(deps: {
     },
   });
 
-  router.get("/", authenticate(database), (request, response) => {
+  router.get("/", authenticate(database), async (request, response) => {
     const user = currentUser(request);
     const query = listQuerySchema.parse(request.query);
 
@@ -409,12 +399,12 @@ export function createReportsRouter(deps: {
     }
     const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
-    const rows = database
+    const rows = (await database
       .prepare(`${REPORT_SELECT} ${where} ORDER BY reports.created_at DESC`)
-      .all(...parameters) as ReportRow[];
-    const { total } = database
+      .all(...parameters)) as ReportRow[];
+    const { total } = (await database
       .prepare(`SELECT COUNT(*) AS total FROM reports ${where}`)
-      .get(...parameters) as { total: number };
+      .get(...parameters)) as { total: number };
 
     response.json({
       reports: rows.map((row) => serializeSummary(row)),
@@ -426,16 +416,16 @@ export function createReportsRouter(deps: {
     "/",
     authenticate(database),
     upload.single("photo"),
-    (request, response) => {
+    async (request, response) => {
       const user = currentUser(request);
       const input = createReportSchema.parse(request.body);
 
-      const category = database
+      const category = (await database
         .prepare(
           `SELECT id, name, organization_id FROM categories
            WHERE id = ? AND active = 1`,
         )
-        .get(input.categoryId) as
+        .get(input.categoryId)) as
         | { id: string; name: string; organization_id: string }
         | undefined;
       if (!category) {
@@ -449,10 +439,15 @@ export function createReportsRouter(deps: {
 
       const now = Date.now();
       const reportId = randomUUID();
-      const referenceCode = nextReferenceCode(database);
+      const referenceCode = await nextReferenceCode(database);
 
-      database.transaction(() => {
-        database
+      const file = request.file;
+      const storedPhoto = file
+        ? await photos.save(file.buffer, file.originalname, file.mimetype)
+        : null;
+
+      await database.transaction(async () => {
+        await database
           .prepare(
             `INSERT INTO reports
               (id, reference_code, title, description, location, category_id,
@@ -473,7 +468,7 @@ export function createReportsRouter(deps: {
             now,
           );
 
-        recordReportEvent(database, {
+        await recordReportEvent(database, {
           reportId,
           actorUserId: user.id,
           action: "REPORT_CREATED",
@@ -481,9 +476,8 @@ export function createReportsRouter(deps: {
           message: input.title,
         });
 
-        const file = request.file;
-        if (file) {
-          database
+        if (file && storedPhoto) {
+          await database
             .prepare(
               `INSERT INTO attachments
                 (id, report_id, filename, stored_name, content_type, size_bytes, created_at)
@@ -493,45 +487,45 @@ export function createReportsRouter(deps: {
               randomUUID(),
               reportId,
               file.originalname,
-              file.filename,
+              storedPhoto.storedName,
               file.mimetype,
               file.size,
               now,
             );
         }
 
-        notifyOrganization(database, category.organization_id, {
+        await notifyOrganization(database, category.organization_id, {
           reportId,
           type: "REPORT_SUBMITTED",
           title: `New report: ${input.title}`,
           message: `${referenceCode} was submitted to ${category.name} and needs review.`,
         });
-      })();
+      });
 
-      const row = loadReport(database, reportId);
-      response.status(201).json(serializeDetail(database, row, user));
+      const row = await loadReport(database, reportId);
+      response.status(201).json(await serializeDetail(database, photos, row, user));
     },
   );
 
-  router.get("/:reportId", authenticate(database), (request, response) => {
+  router.get("/:reportId", authenticate(database), async (request, response) => {
     const user = currentUser(request);
-    const row = loadReport(database, pathId(request, "reportId"));
+    const row = await loadReport(database, pathId(request, "reportId"));
     assertCanView(row, user);
-    response.json(serializeDetail(database, row, user));
+    response.json(await serializeDetail(database, photos, row, user));
   });
 
   router.post(
     "/:reportId/claim",
     authenticate(database),
     requireStaff(),
-    (request, response) => {
+    async (request, response) => {
       const user = currentUser(request);
-      const row = loadReport(database, pathId(request, "reportId"));
+      const row = await loadReport(database, pathId(request, "reportId"));
       assertCanView(row, user);
       assertCanManage(row, user);
 
       if (row.assigned_user_id === user.id) {
-        response.json(serializeDetail(database, row, user));
+        response.json(await serializeDetail(database, photos, row, user));
         return;
       }
       if (row.assigned_user_id) {
@@ -542,22 +536,22 @@ export function createReportsRouter(deps: {
         );
       }
 
-      database
+      await database
         .prepare("UPDATE reports SET assigned_user_id = ?, updated_at = ? WHERE id = ?")
         .run(user.id, Date.now(), row.id);
-      recordReportEvent(database, {
+      await recordReportEvent(database, {
         reportId: row.id,
         actorUserId: user.id,
         action: "REPORT_CLAIMED",
       });
-      notifyReporterOfReport(
+      await notifyReporterOfReport(
         database,
         row,
         "REPORT_ASSIGNED",
         `An official is handling ${row.reference_code}`,
         `${user.displayName} took ownership of your report “${row.title}”.`,
       );
-      recordAudit(database, {
+      await recordAudit(database, {
         actorUserId: user.id,
         action: "REPORT_CLAIMED",
         targetType: "REPORT",
@@ -565,7 +559,9 @@ export function createReportsRouter(deps: {
         details: { referenceCode: row.reference_code },
       });
 
-      response.json(serializeDetail(database, loadReport(database, row.id), user));
+      response.json(
+        await serializeDetail(database, photos, await loadReport(database, row.id), user),
+      );
     },
   );
 
@@ -573,10 +569,10 @@ export function createReportsRouter(deps: {
     "/:reportId/status",
     authenticate(database),
     requireStaff(),
-    (request, response) => {
+    async (request, response) => {
       const user = currentUser(request);
       const input = statusSchema.parse(request.body);
-      const row = loadReport(database, pathId(request, "reportId"));
+      const row = await loadReport(database, pathId(request, "reportId"));
       assertCanView(row, user);
       assertCanManage(row, user);
 
@@ -589,24 +585,24 @@ export function createReportsRouter(deps: {
         );
       }
 
-      database
+      await database
         .prepare("UPDATE reports SET status = ?, updated_at = ? WHERE id = ?")
         .run(input.status, Date.now(), row.id);
-      recordReportEvent(database, {
+      await recordReportEvent(database, {
         reportId: row.id,
         actorUserId: user.id,
         action: "REPORT_STATUS_CHANGED",
         fromStatus: row.status,
         toStatus: input.status,
       });
-      notifyReporterOfReport(
+      await notifyReporterOfReport(
         database,
         row,
         "REPORT_STATUS_CHANGED",
         `${row.reference_code} is now ${reportStatusLabel(input.status).toLowerCase()}`,
         `Your report “${row.title}” moved from ${reportStatusLabel(row.status).toLowerCase()} to ${reportStatusLabel(input.status).toLowerCase()}.`,
       );
-      recordAudit(database, {
+      await recordAudit(database, {
         actorUserId: user.id,
         action: "REPORT_STATUS_CHANGED",
         targetType: "REPORT",
@@ -618,7 +614,9 @@ export function createReportsRouter(deps: {
         },
       });
 
-      response.json(serializeDetail(database, loadReport(database, row.id), user));
+      response.json(
+        await serializeDetail(database, photos, await loadReport(database, row.id), user),
+      );
     },
   );
 
@@ -626,36 +624,36 @@ export function createReportsRouter(deps: {
     "/:reportId/updates",
     authenticate(database),
     requireStaff(),
-    (request, response) => {
+    async (request, response) => {
       const user = currentUser(request);
       const input = updateSchema.parse(request.body);
-      const row = loadReport(database, pathId(request, "reportId"));
+      const row = await loadReport(database, pathId(request, "reportId"));
       assertCanView(row, user);
       assertCanManage(row, user);
 
-      database
+      await database
         .prepare(
           `INSERT INTO report_updates (id, report_id, author_user_id, message, created_at)
            VALUES (?, ?, ?, ?, ?)`,
         )
         .run(randomUUID(), row.id, user.id, input.message, Date.now());
-      database
+      await database
         .prepare("UPDATE reports SET updated_at = ? WHERE id = ?")
         .run(Date.now(), row.id);
-      recordReportEvent(database, {
+      await recordReportEvent(database, {
         reportId: row.id,
         actorUserId: user.id,
         action: "REPORT_UPDATE_ADDED",
         message: input.message,
       });
-      notifyReporterOfReport(
+      await notifyReporterOfReport(
         database,
         row,
         "REPORT_UPDATE",
         `Update on ${row.reference_code}`,
         `${user.displayName} posted an update on your report “${row.title}”.`,
       );
-      recordAudit(database, {
+      await recordAudit(database, {
         actorUserId: user.id,
         action: "REPORT_UPDATE_ADDED",
         targetType: "REPORT",
@@ -663,7 +661,9 @@ export function createReportsRouter(deps: {
         details: { referenceCode: row.reference_code },
       });
 
-      response.status(201).json(serializeDetail(database, loadReport(database, row.id), user));
+      response
+        .status(201)
+        .json(await serializeDetail(database, photos, await loadReport(database, row.id), user));
     },
   );
 
@@ -671,21 +671,21 @@ export function createReportsRouter(deps: {
     "/:reportId/moderation",
     authenticate(database),
     requireRole("ADMIN"),
-    (request, response) => {
+    async (request, response) => {
       const user = currentUser(request);
       const input = moderationSchema.parse(request.body);
-      const row = loadReport(database, pathId(request, "reportId"));
+      const row = await loadReport(database, pathId(request, "reportId"));
 
-      database
+      await database
         .prepare("UPDATE reports SET moderation_status = ?, updated_at = ? WHERE id = ?")
         .run(input.moderationStatus, Date.now(), row.id);
-      recordReportEvent(database, {
+      await recordReportEvent(database, {
         reportId: row.id,
         actorUserId: user.id,
         action: "REPORT_MODERATED",
         message: `Moderation status changed to ${input.moderationStatus}.`,
       });
-      recordAudit(database, {
+      await recordAudit(database, {
         actorUserId: user.id,
         action: "REPORT_MODERATED",
         targetType: "REPORT",
@@ -696,7 +696,9 @@ export function createReportsRouter(deps: {
         },
       });
 
-      response.json(serializeDetail(database, loadReport(database, row.id), user));
+      response.json(
+        await serializeDetail(database, photos, await loadReport(database, row.id), user),
+      );
     },
   );
 

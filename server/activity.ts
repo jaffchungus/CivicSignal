@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { CivicDatabase } from "./database";
 
-export function recordAudit(
+export async function recordAudit(
   database: CivicDatabase,
   input: {
     actorUserId: string | null;
@@ -13,8 +13,8 @@ export function recordAudit(
     targetId: string;
     details?: Record<string, unknown>;
   },
-): void {
-  database
+): Promise<void> {
+  await database
     .prepare(
       `INSERT INTO audit_events
         (id, actor_user_id, action, target_type, target_id, details_json, created_at)
@@ -32,7 +32,7 @@ export function recordAudit(
 }
 
 /** Appends an entry to the report history timeline. */
-export function recordReportEvent(
+export async function recordReportEvent(
   database: CivicDatabase,
   input: {
     reportId: string;
@@ -42,9 +42,9 @@ export function recordReportEvent(
     toStatus?: string | null;
     message?: string | null;
   },
-): string {
+): Promise<string> {
   const id = randomUUID();
-  database
+  await database
     .prepare(
       `INSERT INTO report_events
         (id, report_id, actor_user_id, action, from_status, to_status, message, created_at)
@@ -63,7 +63,7 @@ export function recordReportEvent(
   return id;
 }
 
-export function createNotification(
+export async function createNotification(
   database: CivicDatabase,
   input: {
     userId: string;
@@ -72,8 +72,8 @@ export function createNotification(
     title: string;
     message: string;
   },
-): void {
-  database
+): Promise<void> {
+  await database
     .prepare(
       `INSERT INTO notifications
         (id, user_id, report_id, type, title, message, read_at, created_at)
@@ -91,19 +91,19 @@ export function createNotification(
 }
 
 /** Notifies every active staff member of an organization. */
-export function notifyOrganization(
+export async function notifyOrganization(
   database: CivicDatabase,
   organizationId: string,
   input: { reportId: string | null; type: string; title: string; message: string },
-): void {
-  const members = database
+): Promise<void> {
+  const members = (await database
     .prepare(
       `SELECT id FROM users
        WHERE organization_id = ? AND status = 'ACTIVE'
          AND role IN ('OFFICIAL', 'LAW_ENFORCEMENT')`,
     )
-    .all(organizationId) as Array<{ id: string }>;
+    .all(organizationId)) as Array<{ id: string }>;
   for (const member of members) {
-    createNotification(database, { userId: member.id, ...input });
+    await createNotification(database, { userId: member.id, ...input });
   }
 }

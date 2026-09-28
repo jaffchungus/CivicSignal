@@ -55,27 +55,27 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
 
   router.use(authenticate(database), requireRole("ADMIN"));
 
-  router.get("/overview", (_request, response) => {
-    const count = (sql: string): number =>
-      (database.prepare(sql).get() as { count: number }).count;
+  router.get("/overview", async (_request, response) => {
+    const count = async (sql: string): Promise<number> =>
+      ((await database.prepare(sql).get()) as { count: number }).count;
     response.json({
-      users: count("SELECT COUNT(*) AS count FROM users"),
-      organizations: count("SELECT COUNT(*) AS count FROM organizations"),
-      categories: count("SELECT COUNT(*) AS count FROM categories"),
-      pendingVerifications: count(
+      users: await count("SELECT COUNT(*) AS count FROM users"),
+      organizations: await count("SELECT COUNT(*) AS count FROM organizations"),
+      categories: await count("SELECT COUNT(*) AS count FROM categories"),
+      pendingVerifications: await count(
         "SELECT COUNT(*) AS count FROM users WHERE status = 'PENDING'",
       ),
-      moderationQueue: count(
+      moderationQueue: await count(
         "SELECT COUNT(*) AS count FROM reports WHERE moderation_status != 'VISIBLE'",
       ),
-      openReports: count(
+      openReports: await count(
         `SELECT COUNT(*) AS count FROM reports
          WHERE status NOT IN ('RESOLVED', 'CLOSED') AND moderation_status = 'VISIBLE'`,
       ),
     });
   });
 
-  router.get("/users", (request, response) => {
+  router.get("/users", async (request, response) => {
     const query = z
       .object({ q: z.string().trim().max(200).optional() })
       .parse(request.query);
@@ -90,23 +90,23 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     }
     const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
-    const rows = database
+    const rows = (await database
       .prepare(
         `${USER_SELECT}
          ${where}
          ORDER BY CASE users.status WHEN 'PENDING' THEN 0 ELSE 1 END, users.created_at DESC`,
       )
-      .all(...parameters) as UserRow[];
+      .all(...parameters)) as UserRow[];
 
     response.json({ users: rows.map(serializeAdminUser) });
   });
 
-  router.post("/users/:userId/verify", (request, response) => {
+  router.post("/users/:userId/verify", async (request, response) => {
     const admin = currentUser(request);
     const input = verifySchema.parse(request.body);
-    const target = database
+    const target = (await database
       .prepare("SELECT id, status FROM users WHERE id = ?")
-      .get(request.params.userId) as { id: string; status: string } | undefined;
+      .get(request.params.userId)) as { id: string; status: string } | undefined;
     if (!target) {
       throw new ApiError(404, "USER_NOT_FOUND", "This user does not exist.");
     }
@@ -122,9 +122,9 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
           { organizationId: ["Select the organization this account serves."] },
         );
       }
-      const organization = database
+      const organization = (await database
         .prepare("SELECT id, kind FROM organizations WHERE id = ? AND active = 1")
-        .get(input.organizationId) as
+        .get(input.organizationId)) as
         | { id: string; kind: OrganizationKind }
         | undefined;
       if (!organization || organization.kind !== expectedKind) {
@@ -152,7 +152,7 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     }
 
     const now = Date.now();
-    database
+    await database
       .prepare(
         `UPDATE users
          SET role = ?, organization_id = ?, status = 'ACTIVE',
@@ -160,7 +160,7 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
          WHERE id = ?`,
       )
       .run(input.role, organizationId, now, admin.id, now, target.id);
-    recordAudit(database, {
+    await recordAudit(database, {
       actorUserId: admin.id,
       action: "USER_VERIFIED",
       targetType: "USER",
@@ -168,15 +168,15 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
       details: { role: input.role, organizationId },
     });
 
-    response.json({ user: findUser(database, target.id) });
+    response.json({ user: await findUser(database, target.id) });
   });
 
-  router.post("/users/:userId/status", (request, response) => {
+  router.post("/users/:userId/status", async (request, response) => {
     const admin = currentUser(request);
     const input = accountStatusSchema.parse(request.body);
-    const target = database
+    const target = (await database
       .prepare("SELECT id, status FROM users WHERE id = ?")
-      .get(request.params.userId) as { id: string; status: string } | undefined;
+      .get(request.params.userId)) as { id: string; status: string } | undefined;
     if (!target) {
       throw new ApiError(404, "USER_NOT_FOUND", "This user does not exist.");
     }
@@ -188,13 +188,13 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
       );
     }
 
-    database
+    await database
       .prepare("UPDATE users SET status = ?, updated_at = ? WHERE id = ?")
       .run(input.status, Date.now(), target.id);
     if (input.status === "SUSPENDED") {
-      database.prepare("DELETE FROM sessions WHERE user_id = ?").run(target.id);
+      await database.prepare("DELETE FROM sessions WHERE user_id = ?").run(target.id);
     }
-    recordAudit(database, {
+    await recordAudit(database, {
       actorUserId: admin.id,
       action: input.status === "SUSPENDED" ? "USER_SUSPENDED" : "USER_REINSTATED",
       targetType: "USER",
@@ -210,8 +210,8 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.get("/organizations", (_request, response) => {
-    const rows = database
+  router.get("/organizations", async (_request, response) => {
+    const rows = (await database
       .prepare(
         `SELECT organizations.id, organizations.name, organizations.kind, organizations.active,
                 (SELECT COUNT(*) FROM users WHERE users.organization_id = organizations.id)
@@ -219,7 +219,7 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
          FROM organizations
          ORDER BY organizations.name`,
       )
-      .all() as Array<{
+      .all()) as Array<{
       id: string;
       name: string;
       kind: OrganizationKind;
@@ -237,18 +237,18 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.post("/organizations", (request, response) => {
+  router.post("/organizations", async (request, response) => {
     const admin = currentUser(request);
     const input = organizationSchema.parse(request.body);
     const id = randomUUID();
     const now = Date.now();
-    database
+    await database
       .prepare(
         `INSERT INTO organizations (id, name, kind, active, created_at, updated_at)
          VALUES (?, ?, ?, 1, ?, ?)`,
       )
       .run(id, input.name, input.kind, now, now);
-    recordAudit(database, {
+    await recordAudit(database, {
       actorUserId: admin.id,
       action: "ORGANIZATION_CREATED",
       targetType: "ORGANIZATION",
@@ -260,12 +260,12 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.post("/organizations/:organizationId/active", (request, response) => {
+  router.post("/organizations/:organizationId/active", async (request, response) => {
     const admin = currentUser(request);
     const input = activeSchema.parse(request.body);
-    const organization = database
+    const organization = (await database
       .prepare("SELECT id, name FROM organizations WHERE id = ?")
-      .get(request.params.organizationId) as { id: string; name: string } | undefined;
+      .get(request.params.organizationId)) as { id: string; name: string } | undefined;
     if (!organization) {
       throw new ApiError(
         404,
@@ -273,10 +273,10 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
         "This organization does not exist.",
       );
     }
-    database
+    await database
       .prepare("UPDATE organizations SET active = ?, updated_at = ? WHERE id = ?")
       .run(input.active ? 1 : 0, Date.now(), organization.id);
-    recordAudit(database, {
+    await recordAudit(database, {
       actorUserId: admin.id,
       action: "ORGANIZATION_UPDATED",
       targetType: "ORGANIZATION",
@@ -288,8 +288,8 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.get("/categories", (_request, response) => {
-    const rows = database
+  router.get("/categories", async (_request, response) => {
+    const rows = (await database
       .prepare(
         `SELECT categories.id, categories.name, categories.description, categories.active,
                 categories.organization_id, organizations.name AS organization_name
@@ -297,7 +297,7 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
          JOIN organizations ON organizations.id = categories.organization_id
          ORDER BY categories.name`,
       )
-      .all() as Array<{
+      .all()) as Array<{
       id: string;
       name: string;
       description: string;
@@ -317,12 +317,12 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.post("/categories", (request, response) => {
+  router.post("/categories", async (request, response) => {
     const admin = currentUser(request);
     const input = categorySchema.parse(request.body);
-    const organization = database
+    const organization = (await database
       .prepare("SELECT id FROM organizations WHERE id = ?")
-      .get(input.organizationId) as { id: string } | undefined;
+      .get(input.organizationId)) as { id: string } | undefined;
     if (!organization) {
       throw new ApiError(
         422,
@@ -333,14 +333,14 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     }
     const id = randomUUID();
     const now = Date.now();
-    database
+    await database
       .prepare(
         `INSERT INTO categories
           (id, name, description, organization_id, active, created_at, updated_at)
          VALUES (?, ?, ?, ?, 1, ?, ?)`,
       )
       .run(id, input.name, input.description, organization.id, now, now);
-    recordAudit(database, {
+    await recordAudit(database, {
       actorUserId: admin.id,
       action: "CATEGORY_CREATED",
       targetType: "CATEGORY",
@@ -358,19 +358,19 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.post("/categories/:categoryId/active", (request, response) => {
+  router.post("/categories/:categoryId/active", async (request, response) => {
     const admin = currentUser(request);
     const input = activeSchema.parse(request.body);
-    const category = database
+    const category = (await database
       .prepare("SELECT id, name FROM categories WHERE id = ?")
-      .get(request.params.categoryId) as { id: string; name: string } | undefined;
+      .get(request.params.categoryId)) as { id: string; name: string } | undefined;
     if (!category) {
       throw new ApiError(404, "CATEGORY_NOT_FOUND", "This category does not exist.");
     }
-    database
+    await database
       .prepare("UPDATE categories SET active = ?, updated_at = ? WHERE id = ?")
       .run(input.active ? 1 : 0, Date.now(), category.id);
-    recordAudit(database, {
+    await recordAudit(database, {
       actorUserId: admin.id,
       action: "CATEGORY_UPDATED",
       targetType: "CATEGORY",
@@ -382,9 +382,9 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     });
   });
 
-  router.get("/audit", (request, response) => {
+  router.get("/audit", async (request, response) => {
     const query = auditQuerySchema.parse(request.query);
-    const rows = database
+    const rows = (await database
       .prepare(
         `SELECT audit_events.id, audit_events.action, audit_events.target_type,
                 audit_events.target_id, audit_events.details_json, audit_events.created_at,
@@ -395,7 +395,7 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
          ORDER BY audit_events.created_at DESC
          LIMIT ?`,
       )
-      .all(query.limit) as Array<{
+      .all(query.limit)) as Array<{
       id: string;
       action: string;
       target_type: string;
