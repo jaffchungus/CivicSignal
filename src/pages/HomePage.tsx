@@ -1,0 +1,209 @@
+import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
+
+import { ReportTable } from "../components/ReportTable";
+import { useAuth } from "../lib/auth";
+import { useFetch } from "../lib/hooks";
+import type {
+  AdminOverview,
+  Category,
+  ReportListResponse,
+} from "../../shared/contracts";
+
+function ResidentHome() {
+  const list = useFetch<ReportListResponse>("/api/reports?scope=mine");
+  const reports = list.data?.reports ?? [];
+  const { loading, error } = list;
+
+  return (
+    <section>
+      <div className="page-header">
+        <div>
+          <h1>My reports</h1>
+          <p className="muted">
+            Track the community issues you have submitted and any responses from local
+            public-service organizations.
+          </p>
+        </div>
+        <Link className="button primary" to="/reports/new">
+          Report an issue
+        </Link>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {loading ? (
+        <p className="centered">Loading…</p>
+      ) : reports.length === 0 ? (
+        <div className="card empty">
+          <h2>No reports yet</h2>
+          <p className="muted">
+            Potholes, broken streetlights, sanitation problems, park maintenance — if it
+            is a non-emergency community issue, report it here and follow what happens.
+          </p>
+          <Link className="button primary" to="/reports/new">
+            Report your first issue
+          </Link>
+        </div>
+      ) : (
+        <ReportTable reports={reports} />
+      )}
+    </section>
+  );
+}
+
+function StaffHome() {
+  const [status, setStatus] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const { user } = useAuth();
+
+  const params = new URLSearchParams({ scope: "queue" });
+  if (status) params.set("status", status);
+  if (categoryId) params.set("categoryId", categoryId);
+  if (query) params.set("q", query);
+  const list = useFetch<ReportListResponse>(`/api/reports?${params.toString()}`);
+  const categoryList = useFetch<{ categories: Category[] }>("/api/categories");
+
+  const categories = categoryList.data?.categories ?? [];
+  const reports = list.data?.reports ?? [];
+  const total = list.data?.total ?? reports.length;
+  const { loading, error } = list;
+
+  return (
+    <section>
+      <div className="page-header">
+        <div>
+          <h1>{user?.organizationName ?? "Department"} queue</h1>
+          <p className="muted">
+            Review new reports, take ownership, post updates, and resolve the issues your
+            organization is responsible for.
+          </p>
+        </div>
+      </div>
+
+      <form
+        className="filters"
+        onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          setQuery(search.trim());
+        }}
+      >
+        <select
+          className="select"
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+        >
+          <option value="">All statuses</option>
+          <option value="SUBMITTED">Submitted</option>
+          <option value="UNDER_REVIEW">Under review</option>
+          <option value="IN_PROGRESS">In progress</option>
+          <option value="RESOLVED">Resolved</option>
+          <option value="CLOSED">Closed</option>
+        </select>
+        <select
+          className="select"
+          value={categoryId}
+          onChange={(event) => setCategoryId(event.target.value)}
+        >
+          <option value="">All categories</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+            </option>
+          ))}
+        </select>
+        <input
+          className="input"
+          placeholder="Search title, description, or reference…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <button className="button" type="submit">
+          Search
+        </button>
+      </form>
+
+      {error && <p className="error">{error}</p>}
+      {loading ? (
+        <p className="centered">Loading…</p>
+      ) : reports.length === 0 ? (
+        <div className="card empty">
+          <h2>The queue is empty</h2>
+          <p className="muted">
+            No reports match these filters right now. New reports submitted by residents
+            appear here automatically.
+          </p>
+        </div>
+      ) : (
+        <>
+          <p className="muted">
+            {total} report{total === 1 ? "" : "s"}
+          </p>
+          <ReportTable reports={reports} />
+        </>
+      )}
+    </section>
+  );
+}
+
+function AdminHome() {
+  const overviewFetch = useFetch<AdminOverview>("/api/admin/overview");
+  const list = useFetch<ReportListResponse>("/api/reports?scope=all");
+  const overview = overviewFetch.data;
+  const reports = list.data?.reports ?? [];
+  const { loading } = list;
+
+  const cards = [
+    { label: "Open reports", value: overview?.openReports },
+    { label: "Pending verifications", value: overview?.pendingVerifications },
+    { label: "Moderation queue", value: overview?.moderationQueue },
+    { label: "Users", value: overview?.users },
+    { label: "Organizations", value: overview?.organizations },
+    { label: "Categories", value: overview?.categories },
+  ];
+
+  return (
+    <section>
+      <div className="page-header">
+        <div>
+          <h1>Platform overview</h1>
+          <p className="muted">
+            Manage users, official verification, organizations, categories, and
+            moderation.
+          </p>
+        </div>
+        <Link className="button primary" to="/admin">
+          Open administration
+        </Link>
+      </div>
+      <div className="stat-grid">
+        {cards.map((card) => (
+          <div key={card.label} className="stat-card">
+            <span className="stat-value">{card.value ?? "—"}</span>
+            <span className="stat-label">{card.label}</span>
+          </div>
+        ))}
+      </div>
+      <h2>All reports</h2>
+      {loading ? (
+        <p className="centered">Loading…</p>
+      ) : (
+        <ReportTable reports={reports.slice(0, 8)} />
+      )}
+    </section>
+  );
+}
+
+export function HomePage() {
+  const { user } = useAuth();
+  if (!user) {
+    return null;
+  }
+  if (user.role === "ADMIN") {
+    return <AdminHome />;
+  }
+  if (user.role === "OFFICIAL" || user.role === "LAW_ENFORCEMENT") {
+    return <StaffHome />;
+  }
+  return <ResidentHome />;
+}
