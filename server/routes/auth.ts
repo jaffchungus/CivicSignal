@@ -13,7 +13,9 @@ import {
 import type { CivicDatabase } from "../database";
 import { ApiError, sendError } from "../http";
 import {
+  authenticate,
   createSession,
+  currentUser,
   destroySession,
   userForSessionToken,
 } from "../session";
@@ -38,6 +40,15 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   email: z.string().trim().email().max(254),
   password: z.string().min(1).max(128),
+});
+
+const profileSchema = z.object({
+  displayName: z.string().trim().min(2).max(100),
+});
+
+const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z.string().min(12).max(128),
 });
 
 /** Roles other than resident may only be requested; administrators verify them. */
@@ -319,6 +330,66 @@ export function createAuthRouter(deps: {
   router.post("/auth/logout", (request, response) => {
     destroySession(database, request, response);
     response.status(204).end();
+  });
+
+  router.patch("/auth/profile", authenticate(database), (request, response, next) => {
+    try {
+      const user = currentUser(request);
+      const input = profileSchema.parse(request.body);
+      database
+        .prepare("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?")
+        .run(input.displayName, Date.now(), user.id);
+
+      recordAudit(database, {
+        actorUserId: user.id,
+        action: "PROFILE_UPDATED",
+        targetType: "USER",
+        targetId: user.id,
+        details: { displayName: input.displayName },
+      });
+
+      response.json({ user: findUser(database, user.id) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/auth/password", authenticate(database), async (request, response, next) => {
+    try {
+      const user = currentUser(request);
+      const input = passwordChangeSchema.parse(request.body);
+      const row = database
+        .prepare("SELECT password_hash FROM users WHERE id = ?")
+        .get(user.id) as { password_hash: string } | undefined;
+      const matches = row
+        ? await bcrypt.compare(input.currentPassword, row.password_hash)
+        : false;
+      if (!matches) {
+        sendError(
+          response,
+          401,
+          "INVALID_CREDENTIALS",
+          "The current password is incorrect.",
+        );
+        return;
+      }
+
+      const passwordHash = await bcrypt.hash(input.newPassword, 12);
+      database
+        .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+        .run(passwordHash, Date.now(), user.id);
+
+      recordAudit(database, {
+        actorUserId: user.id,
+        action: "PASSWORD_CHANGED",
+        targetType: "USER",
+        targetId: user.id,
+      });
+
+      response.json({ user: findUser(database, user.id) });
+    } catch (error) {
+      next(error);
+    }
   });
 
   return router;

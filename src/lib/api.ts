@@ -68,6 +68,13 @@ export const api = {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   },
+  patch<T>(path: string, body?: unknown): Promise<T> {
+    return request<T>(path, {
+      method: "PATCH",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  },
   postForm<T>(path: string, form: FormData): Promise<T> {
     return request<T>(path, { method: "POST", body: form });
   },

@@ -6,6 +6,7 @@ import { useAuth } from "./lib/auth";
 import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
 import { NotificationsPage } from "./pages/NotificationsPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { ReportCreatePage } from "./pages/ReportCreatePage";
 import { ReportDetailPage } from "./pages/ReportDetailPage";
 import { SetupPage } from "./pages/SetupPage";
@@ -117,6 +118,14 @@ export default function App() {
           element={
             <Protected>
               <NotificationsPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <Protected>
+              <ProfilePage />
             </Protected>
           }
         />

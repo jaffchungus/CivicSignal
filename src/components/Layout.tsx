@@ -26,6 +26,7 @@ export function Layout() {
               {unreadCount > 0 && <span className="pill">{unreadCount}</span>}
             </NavLink>
             {user.role === "ADMIN" && <NavLink to="/admin">Administration</NavLink>}
+            <NavLink to="/profile">Profile</NavLink>
             <span className="user-chip">{user.displayName}</span>
             <button
               type="button"
