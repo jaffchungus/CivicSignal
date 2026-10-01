@@ -1,0 +1,49 @@
+# CivicSignal on Supabase and Vercel
+
+## Architecture
+
+CivicSignal is a React 19 / Vite 7 SPA backed by Express 5, not Next.js. It uses TypeScript, React Router, shared API contracts, and custom CSS. There is no `todos` table or Supabase Auth identity mapping.
+
+Accounts, bcrypt password hashes, HTTP-only `civicsignal_session` cookies, administrator verification, and organization/report authorization remain unchanged. The browser calls Express. Do not add Supabase Auth sessions or Next.js cookie-refresh middleware alongside this authentication system. `@supabase/ssr` is not needed or installed; the used SDK is `@supabase/supabase-js`, exclusively on the server.
+
+The existing `CivicDatabase` Postgres adapter connects to Supabase via `DATABASE_URL`. Queries use unnamed parameters, compatible with Supabase transaction pooling. Local development/tests retain SQLite unless a connection string is explicitly supplied. The standalone entry loads `.env.local` then `.env` using Node's native environment loader; process environment values take precedence.
+
+`SupabasePhotoStore` implements the existing photo adapter with a **private** bucket. The server uploads using a server-only secret and issues five-minute signed URLs only after report authorization succeeds. A signed URL is a temporary bearer capability: anyone given the URL can use it until it expires. Existing Vercel Blob attachment URLs remain readable when switching storage. Existing Postgres/Blob deployments also remain supported with `PHOTO_STORAGE=blob`.
+
+## Required deployment configuration
+
+The supplied project URL and publishable key are in the ignored `.env.local` and documented in `.env.example`. They are **not** sufficient to run CivicSignal's SQL backend or private storage. No database password, secret key, or pooler hostname is inferred from them.
+
+Set these in Vercel's environment settings (not source control):
+
+- `DATABASE_URL`: copy **Connect → Transaction pooler** from the supplied Supabase project; include the actual database password, percent-encoding special characters. Use SSL (`sslmode=require` at minimum; prefer certificate verification). Do not guess the pooler host or substitute the Supabase API URL.
+- `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`: `https://zocubotkhlkrtbyyheiu.supabase.co`.
+- `SUPABASE_SECRET_KEY`: a server-only secret from **Settings → API Keys**. Legacy `SUPABASE_SERVICE_ROLE_KEY` is supported if already provisioned. Never use a `VITE_` or `NEXT_PUBLIC_` prefix for a privileged credential.
+- `PHOTO_STORAGE=supabase`.
+- `SUPABASE_PHOTO_BUCKET=civicsignal-photos` (default).
+
+Create that bucket in the Supabase Dashboard as **private**, allow JPEG/PNG/WebP/GIF, and set its upload limit to 5 MiB or lower. Public buckets are rejected by the application. Do not add public read/write Storage policies for this bucket: CivicSignal users are authorized by Express, not Supabase JWTs.
+
+On startup the existing schema is created if absent, with transaction-scoped advisory locking across cold starts. Row-level security is enabled for CivicSignal's existing tables and table grants are revoked from `PUBLIC`, `anon`, and `authenticated`. No permissive Data API policies are added. The trusted SQL connection must own these tables or otherwise have the necessary DDL privileges and bypass RLS. These startup operations modify the target database; obtain deployment approval and back up existing data before pointing at a populated project. Do not apply to unrelated tables or replace the existing data.
+
+Vercel uses `api/index.ts` and the existing `vercel.json`: static output `dist/client`, API rewrite to Express, and SPA fallback. Initialization failures can be retried by a subsequent request rather than permanently poisoning the warm instance.
+
+Vercel's request-body limit is smaller than the local 5 MiB upload limit; production uploads must fit within the platform's total multipart request limit. Other existing production limitations, including per-instance rate limiting and concurrency-sensitive workflow mutations, are not solved by this integration.
+
+## Report reference allocation and rollback cleanup
+
+References keep the existing `CS-YYYY-NNNN` format and installation-wide numbering. Allocation runs inside the report transaction: a row in the existing `settings` table (`report_reference_counter`) is seeded once from the existing report count, then incremented by SQL `UPDATE … RETURNING`. No table, column, or index is added. Do not reset this row or run old allocator code concurrently during rollout.
+
+SQLite uses its per-connection transaction mutex and `BEGIN IMMEDIATE` write lock. Native busy waiting is disabled; acquiring locks retries `SQLITE_BUSY` asynchronously for up to five seconds, yielding so other adapters can finish their transactions. Standalone statements and initialization use the same bounded retry, but transaction callbacks and statements inside an acquired write transaction are not replayed. Postgres uses the existing `settings.key` primary key for initialization conflicts and locks the counter row on update until commit/rollback. At its default READ COMMITTED isolation, competing updates wait and increment the committed row version. Thus independent function instances cannot allocate the same number. Higher isolation levels can abort a competing transaction rather than wait successfully; those failures still roll back and trigger photo cleanup. Evidence: [Postgres transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED) and [row-level locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS). No pool-size or JavaScript mutex assumption is needed for the Postgres guarantee.
+
+Report photo compensation runs only through the adapter-owned `onRollback` hook: the outermost transaction invokes it after acknowledged rollback and before any COMMIT attempt. A rejected transaction promise alone is not proof of rollback. COMMIT acknowledgement failures, unclassified rejections, failed rollbacks, and post-commit response/signing failures never authorize photo deletion. Postgres discards clients with uncertain outcomes rather than attempting a misleading ROLLBACK after COMMIT; SQLite attempts to end any still-open transaction but does not compensate after a commit attempt. The original transaction error is propagated unchanged even if rollback or compensation fails. Reference counter updates roll back with report/event/attachment inserts. Cleanup is awaited before returning the persistence error. Database/storage cannot be committed atomically: if storage deletion itself fails, a safe warning is logged and the original persistence error is preserved; a process crash can also prevent compensation. This is not a durable orphan-reconciliation mechanism.
+
+API regressions in `tests/api/report-persistence.api.test.ts` exercise overlapping real photo uploads, initial and subsequent counter allocation, failure before/after report insertion, cleanup, rollback, retry, and compatibility with pre-counter reports. SQLite cases run by default, including one- and two-adapter submissions against the same file. Postgres cases require an explicitly supplied **disposable direct/session test connection** in `TEST_POSTGRES_URL` with schema-creation permissions; never point it at production. They create/drop a uniquely named test schema and use two independent Postgres adapters against it, so `max: 1` cannot mask cross-connection races. Run `pnpm test -- tests/api/report-persistence.api.test.ts` with that variable set. The Postgres cases were not executed locally because no such connection was supplied. Supabase/Blob deletion tests simulate provider HTTP/SDK calls, not live cloud deletes. Fault-injection regressions also exercise committed/unclassified API failures and successful SQLite COMMIT followed by a thrown acknowledgement; adapter tests cover pre-commit rollback, COMMIT failure, failed rollback, and compensation errors. Postgres protocol faults are simulated at the driver boundary, not a live network outage.
+
+## Verification and access limits
+
+Run `pnpm check` for typechecks, API/unit tests, and build. Storage integration tests exercise the real Supabase SDK with simulated HTTP responses and SQLite-backed Express/session flows: private bucket enforcement, successful uploads/signing, denied unrelated-user access, upload/signing errors, and legacy attachments. Postgres adapter tests simulate the `pg` driver and verify initialization, protection SQL, cleanup, and transaction isolation. These are not a live Supabase smoke test.
+
+Read-only probes during this change found the deployed `/` returning HTTP 200 with the CivicSignal app shell, but `/api/setup/status` returning HTTP 500. Without Vercel logs the precise deployed failure is unconfirmed. This workspace has no database/storage secret credentials or authenticated Vercel access, so no live database reads/writes, Storage uploads, environment changes, or redeployments were performed. The supplied Supabase project's existing schema and bucket cannot be confirmed with privileged access here.
+
+After approval and credentials are provided securely, verify the deployment logs and `GET /api/setup/status`, then exercise sign-in/session, profile changes, report creation with a small photo, authorized detail viewing, and denied access by an unrelated account. Do not call setup on an existing production deployment or submit test reports without approval.

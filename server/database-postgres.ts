@@ -1,5 +1,5 @@
-// Postgres driver for production (Vercel Functions against a serverless
-// Postgres such as Neon). Queries are kept to the shared SQLite/Postgres
+// Postgres driver for production (Vercel Functions against external
+// Postgres such as Supabase or Neon). Queries are kept to the shared SQLite/Postgres
 // subset; `?` placeholders are rewritten to numbered `$n` parameters here,
 // and int8 columns are parsed back into JS numbers so COUNT(*) and stored
 // millisecond timestamps behave exactly as they do on SQLite.
@@ -181,16 +181,56 @@ export function toNumberedParameters(sql: string): string {
   return result;
 }
 
-/** Marks the async context that owns a checked-out transaction client. */
-const inTransaction = new AsyncLocalStorage<PoolClient>();
+// These tables use CivicSignal sessions, not Supabase JWTs. Deny direct Data
+// API access rather than adding policies that mistake anonymous SDK callers
+// for authenticated CivicSignal users. The trusted Express server owns access.
+const DATA_API_PROTECTION = `
+  DO $civicsignal$
+  DECLARE table_name text; role_name text;
+  BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+      'settings', 'organizations', 'users', 'sessions', 'categories', 'reports',
+      'report_events', 'report_updates', 'attachments', 'notifications', 'audit_events'
+    ] LOOP
+      EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
+      EXECUTE format('REVOKE ALL ON TABLE %I FROM PUBLIC', table_name);
+      FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+          EXECUTE format('REVOKE ALL ON TABLE %I FROM %I', table_name, role_name);
+        END IF;
+      END LOOP;
+    END LOOP;
+  END;
+  $civicsignal$;
+`;
 
 export async function createPostgresDatabase(connectionString: string): Promise<CivicDatabase> {
-  const pool = new Pool({ connectionString, max: 5 });
+  // No named prepared statements: compatible with Supabase transaction pooling.
+  const pool = new Pool({ connectionString, max: 1, connectionTimeoutMillis: 10_000 });
+  // A transaction context belongs to this database, never another adapter instance.
+  const inTransaction = new AsyncLocalStorage<PoolClient>();
 
   // int8 (COUNT(*), BIGINT timestamps) would otherwise arrive as strings.
   types.setTypeParser(20, (value) => Number(value));
 
-  await pool.query(POSTGRES_SCHEMA);
+  const initializationClient = await pool.connect().catch(async (error: unknown) => {
+    await pool.end();
+    throw error;
+  });
+  try {
+    await initializationClient.query("BEGIN");
+    // Concurrent cold starts must not race CREATE TABLE or schema hardening.
+    await initializationClient.query("SELECT pg_advisory_xact_lock(1962042917)");
+    await initializationClient.query(POSTGRES_SCHEMA);
+    await initializationClient.query(DATA_API_PROTECTION);
+    await initializationClient.query("COMMIT");
+  } catch (error) {
+    await initializationClient.query("ROLLBACK").catch(() => undefined);
+    initializationClient.release();
+    await pool.end();
+    throw error;
+  }
+  initializationClient.release();
 
   const statement = (sql: string): CivicStatement => {
     const text = toNumberedParameters(sql);
@@ -214,21 +254,40 @@ export async function createPostgresDatabase(connectionString: string): Promise<
 
   return {
     prepare: statement,
-    async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    async transaction<T>(fn: () => Promise<T>, onRollback?: () => Promise<void>): Promise<T> {
       if (inTransaction.getStore()) {
         return fn();
       }
       const client = await pool.connect();
+      let commitAttempted = false;
+      let discardClient = false;
       try {
         await client.query("BEGIN");
         const value = await inTransaction.run(client, fn);
+        commitAttempted = true;
         await client.query("COMMIT");
         return value;
       } catch (error) {
-        await client.query("ROLLBACK");
+        if (commitAttempted) {
+          // ROLLBACK after a lost COMMIT reply cannot prove the write was undone.
+          discardClient = true;
+        } else {
+          try {
+            await client.query("ROLLBACK");
+          } catch {
+            discardClient = true;
+          }
+          if (!discardClient) {
+            try {
+              await onRollback?.();
+            } catch {
+              // Compensation cannot replace the original transaction error.
+            }
+          }
+        }
         throw error;
       } finally {
-        client.release();
+        client.release(discardClient);
       }
     },
     async close() {

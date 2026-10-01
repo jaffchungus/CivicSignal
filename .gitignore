@@ -2,6 +2,9 @@ node_modules/
 dist/
 coverage/
 .env
+.env.*
+!.env.example
+.tmp-bin/
 data/
 uploads/
 *.db

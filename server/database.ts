@@ -12,7 +12,12 @@ export type CivicStatement = {
 
 export type CivicDatabase = {
   prepare(sql: string): CivicStatement;
-  /** Runs fn in a transaction, serialized against all other work on this database. */
-  transaction<T>(fn: () => Promise<T>): Promise<T>;
+  /**
+   * Runs fn atomically; cross-connection coordination requires database locks.
+   * The outermost transaction invokes onRollback only after confirmed rollback
+   * before any COMMIT attempt. Unclassified/commit failures never invoke it.
+   * Compensation failures must not replace the original transaction error.
+   */
+  transaction<T>(fn: () => Promise<T>, onRollback?: () => Promise<void>): Promise<T>;
   close(): Promise<void>;
 };

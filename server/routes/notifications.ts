@@ -43,7 +43,7 @@ export function createNotificationsRouter(deps: {
       .all(user.id)) as NotificationRow[];
     const { unreadCount } = (await database
       .prepare(
-        "SELECT COUNT(*) AS unreadCount FROM notifications WHERE user_id = ? AND read_at IS NULL",
+        `SELECT COUNT(*) AS "unreadCount" FROM notifications WHERE user_id = ? AND read_at IS NULL`,
       )
       .get(user.id)) as { unreadCount: number };
 

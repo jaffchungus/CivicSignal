@@ -2,7 +2,7 @@
 // the blob store returns, so url() passes them through unchanged.
 import { randomUUID } from "node:crypto";
 
-import { put } from "@vercel/blob";
+import { del, put } from "@vercel/blob";
 
 import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store";
 
@@ -12,6 +12,10 @@ export class BlobPhotoStore implements PhotoStore {
       access: "public",
       contentType,
     }).then((blob) => ({ storedName: blob.url }));
+  }
+
+  remove(storedName: string): Promise<void> {
+    return del(storedName);
   }
 
   url(storedName: string): string {

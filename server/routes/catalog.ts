@@ -21,8 +21,8 @@ export function createCatalogRouter(deps: { database: CivicDatabase }): Router {
     const categories = await database
       .prepare(
         `SELECT categories.id, categories.name, categories.description,
-                categories.organization_id AS organizationId,
-                organizations.name AS organizationName
+                categories.organization_id AS "organizationId",
+                organizations.name AS "organizationName"
          FROM categories
          JOIN organizations ON organizations.id = categories.organization_id
          WHERE categories.active = 1

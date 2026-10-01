@@ -30,7 +30,7 @@ export async function userForSessionToken(
 ): Promise<PublicUser | null> {
   const session = (await database
     .prepare(
-      `SELECT user_id AS userId FROM sessions
+      `SELECT user_id AS "userId" FROM sessions
        WHERE token_hash = ? AND expires_at > ?`,
     )
     .get(sessionHash(token), Date.now())) as { userId: string } | undefined;

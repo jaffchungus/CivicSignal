@@ -42,6 +42,14 @@ This log is the source of truth for product and architecture decisions that affe
 - **Reason:** Externalizing state makes the app deployable on serverless hosting without changing any product behavior; keeping both drivers behind one seam preserves the zero-infrastructure local workflow and the existing test suite. Known trade-offs: the in-memory rate limiter is per-instance, and Vercel's 4.5 MB request-body cap binds below the 5 MB attachment limit in production.
 - **Affected PRDs:** `01-architecture.md`.
 
+## D-006 — Integrate Supabase without replacing CivicSignal identity
+
+- **Status:** Accepted
+- **Decision:** Supabase is supported through the existing Postgres database adapter and a private-bucket `SupabasePhotoStore`. Express remains the sole owner of account/session and role/organization authorization. Existing SQLite/disk and Postgres/Blob configurations remain supported. No Next.js files, Supabase Auth migration, or unrelated tables are introduced.
+- **Context:** The mission supplied a Supabase project URL and publishable key, but this repository is a Vite/Express application with custom identity and transactional SQL. The publishable key cannot authenticate CivicSignal users to Supabase or substitute for a SQL connection password.
+- **Reason:** Preserving the API/security boundary avoids a second incompatible session system. Private photo URLs are issued only after report authorization; direct Data API access to CivicSignal tables is denied using RLS and revoked grants. Production requires separately supplied SQL credentials, a server-only storage secret, and a private bucket.
+- **Affected PRDs:** `01-architecture.md`. Operational details and verification limits are in `docs/SUPABASE-DEPLOYMENT.md`.
+
 ## Unresolved decisions requiring source material
 
 The following are deliberately unresolved rather than silently assumed:

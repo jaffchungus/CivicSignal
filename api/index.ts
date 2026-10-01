@@ -3,33 +3,23 @@
 // Vercel's CDN from outputDirectory (see vercel.json).
 import type { Request, Response } from "express";
 
-import { createApp } from "../server/app";
-import { createPostgresDatabase } from "../server/database-postgres";
-import { BlobPhotoStore } from "../server/photo-blob";
+import { createProductionApp } from "../server/production";
 
-type App = ReturnType<typeof createApp>["app"];
+type App = Awaited<ReturnType<typeof createProductionApp>>["app"];
 
 let appPromise: Promise<App> | undefined;
 
 function buildApp(): Promise<App> {
-  const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!connectionString) {
-    return Promise.reject(
-      new Error("DATABASE_URL is required to run CivicSignal on Vercel."),
-    );
-  }
-  return createPostgresDatabase(connectionString).then((database) =>
-    createApp({
-      database,
-      photos: new BlobPhotoStore(),
-      secureCookies: true,
-    }).app,
-  );
+  return createProductionApp().then(({ app }) => app);
 }
 
 export default async function handler(request: Request, response: Response): Promise<void> {
   try {
-    appPromise ??= buildApp();
+    appPromise ??= buildApp().catch((error: unknown) => {
+      // A transient storage/database failure must not poison a warm instance.
+      appPromise = undefined;
+      throw error;
+    });
     const app = await appPromise;
     app(request, response);
   } catch (error) {

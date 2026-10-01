@@ -1,6 +1,6 @@
-// Local/standalone entry: SQLite on disk, photos on disk, serves the built
-// client. Production on Vercel uses api/index.ts instead.
-import { mkdirSync } from "node:fs";
+// Standalone entry: SQLite/disk by default; external storage when DATABASE_URL
+// is set. Serves the built client. Vercel uses api/index.ts instead.
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 import express from "express";
@@ -8,6 +8,12 @@ import express from "express";
 import { createApp } from "./app";
 import { createSqliteDatabase } from "./database-sqlite";
 import { DiskPhotoStore } from "./photo-store";
+import { createProductionApp } from "./production";
+
+// Node's native loader keeps existing process environment values authoritative.
+for (const filename of [".env.local", ".env"]) {
+  if (existsSync(filename)) process.loadEnvFile(filename);
+}
 
 const port = Number(process.env.PORT ?? 3001);
 const databasePath = process.env.DATABASE_PATH ?? "./data/civicsignal.db";
@@ -17,11 +23,15 @@ const clientDirectory = path.resolve(
   process.env.CLIENT_DIR ?? path.join("dist", "client"),
 );
 
-mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
+async function localApp() {
+  mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
+  const database = await createSqliteDatabase(databasePath);
+  return createApp({ database, photos: new DiskPhotoStore(uploadDirectory), sessionTtlDays });
+}
 
-const database = await createSqliteDatabase(databasePath);
-const photos = new DiskPhotoStore(uploadDirectory);
-const { app, close } = createApp({ database, photos, sessionTtlDays });
+const { app, close } = process.env.DATABASE_URL || process.env.POSTGRES_URL
+  ? await createProductionApp()
+  : await localApp();
 
 app.use(express.static(clientDirectory));
 app.use((request, response, next) => {

@@ -3,6 +3,7 @@
 // transactions so concurrent async call sites can never interleave their
 // statements inside an open transaction.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 
 import Database from "better-sqlite3";
 
@@ -150,9 +151,6 @@ const SQLITE_SCHEMA = `
       ON audit_events(created_at DESC);
   `;
 
-/** Marks the async context that owns an open transaction. */
-const inTransaction = new AsyncLocalStorage<true>();
-
 class Mutex {
   private tail: Promise<unknown> = Promise.resolve();
 
@@ -163,51 +161,106 @@ class Mutex {
   }
 }
 
+/** Wait for other connections without blocking the event loop they need to commit. */
+async function retryBusy<T>(operation: () => T): Promise<T> {
+  const deadline = performance.now() + 5_000;
+  for (;;) {
+    try {
+      return operation();
+    } catch (error) {
+      if (!(error instanceof Database.SqliteError) || error.code !== "SQLITE_BUSY" || performance.now() >= deadline) {
+        throw error;
+      }
+      await delay(10);
+    }
+  }
+}
+
 export async function createSqliteDatabase(filename: string): Promise<CivicDatabase> {
-  const database = new Database(filename);
-  database.pragma("foreign_keys = ON");
-  database.pragma("journal_mode = WAL");
-  database.pragma("busy_timeout = 5000");
-  database.exec(SQLITE_SCHEMA);
+  // All lock waits are async; better-sqlite3's default busy timeout blocks JS.
+  const database = new Database(filename, { timeout: 0 });
+  try {
+    database.pragma("foreign_keys = ON");
+    await retryBusy(() => database.pragma("journal_mode = WAL"));
+    await retryBusy(() => database.exec(SQLITE_SCHEMA));
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 
+  // Transaction ownership belongs to this connection, not another adapter.
+  const inTransaction = new AsyncLocalStorage<true>();
   const mutex = new Mutex();
-  const execute = <T>(fn: () => T): Promise<T> =>
-    inTransaction.getStore() ? Promise.resolve(fn()) : mutex.run(fn);
-
-  const statement = (sql: string): CivicStatement => ({
-    get: (...parameters) =>
-      execute(() => database.prepare(sql).get(...(parameters as never[]))),
-    all: (...parameters) =>
-      execute(() => database.prepare(sql).all(...(parameters as never[]))),
-    run: (...parameters) =>
-      execute(() => {
-        database.prepare(sql).run(...(parameters as never[]));
-      }),
-  });
+  let unusable = false;
+  const assertUsable = () => {
+    if (unusable || !database.open) throw new Error("SQLite database connection is unavailable.");
+  };
+  const closeConnection = () => {
+    if (database.open) database.close();
+  };
+  const execute = async <T>(fn: () => T): Promise<T> => {
+    const operation = () => {
+      assertUsable();
+      return fn();
+    };
+    // Check at execution time so queued operations cannot use a quarantined connection.
+    // An acquired write transaction does not retry statements or its callback.
+    return inTransaction.getStore() ? operation() : mutex.run(() => retryBusy(operation));
+  };
 
   return {
-    prepare: statement,
-    transaction<T>(fn: () => Promise<T>): Promise<T> {
+    prepare: (sql: string): CivicStatement => ({
+      get: (...parameters) =>
+        execute(() => database.prepare(sql).get(...(parameters as never[]))),
+      all: (...parameters) =>
+        execute(() => database.prepare(sql).all(...(parameters as never[]))),
+      run: (...parameters) =>
+        execute(() => {
+          database.prepare(sql).run(...(parameters as never[]));
+        }),
+    }),
+    async transaction<T>(fn: () => Promise<T>, onRollback?: () => Promise<void>): Promise<T> {
       if (inTransaction.getStore()) {
+        assertUsable();
         return fn();
       }
       return mutex.run(() =>
         inTransaction.run(true, async () => {
-          database.exec("BEGIN");
+          assertUsable();
+          // Acquire the write lock before reading allocation state, including
+          // when another process has opened the same database file.
+          await retryBusy(() => database.exec("BEGIN IMMEDIATE"));
+          let commitAttempted = false;
           try {
             const value = await fn();
+            commitAttempted = true;
             database.exec("COMMIT");
             return value;
           } catch (error) {
-            database.exec("ROLLBACK");
+            if (database.inTransaction) {
+              try {
+                database.exec("ROLLBACK");
+              } catch {
+                // Quarantine before closing: even failed disposal must never allow reuse.
+                unusable = true;
+                try {
+                  closeConnection();
+                } catch {
+                  // Explicit close() can retry disposal; preserve the original error.
+                }
+                throw error;
+              }
+              try {
+                if (!commitAttempted) await onRollback?.();
+              } catch {
+                // Compensation cannot replace the original transaction error.
+              }
+            }
             throw error;
           }
         }),
       );
     },
-    close: () =>
-      mutex.run(() => {
-        database.close();
-      }),
+    close: () => mutex.run(closeConnection),
   };
 }

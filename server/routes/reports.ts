@@ -246,17 +246,27 @@ async function serializeDetail(
     actor_role: UserRole | null;
   }>;
 
+  const availableAttachments = await Promise.all(attachments.map(async (attachment) => {
+    try {
+      return {
+        id: attachment.id,
+        filename: attachment.filename,
+        url: await photos.url(attachment.stored_name),
+        contentType: attachment.content_type,
+      };
+    } catch {
+      // Optional photo delivery must not fail a saved report. Keep the stored
+      // attachment for a later read; never fall back to its private storage name.
+      return null;
+    }
+  }));
+
   const staffScope =
     isStaffRole(user.role) && row.organization_id === user.organizationId;
 
   return {
     ...serializeSummary(row),
-    attachments: attachments.map((attachment) => ({
-      id: attachment.id,
-      filename: attachment.filename,
-      url: photos.url(attachment.stored_name),
-      contentType: attachment.content_type,
-    })),
+    attachments: availableAttachments.filter((attachment) => attachment !== null),
     updates: updates.map((update) => ({
       id: update.id,
       message: update.message,
@@ -296,11 +306,21 @@ async function serializeDetail(
   };
 }
 
+/** Must run inside the same transaction as the report insert. */
 async function nextReferenceCode(database: CivicDatabase): Promise<string> {
-  const { count } = (await database
-    .prepare("SELECT COUNT(*) AS count FROM reports")
-    .get()) as { count: number };
-  return `CS-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
+  // Seed from existing reports once, preserving numbering on upgraded databases.
+  // The unique settings key and atomic UPDATE serialize concurrent allocations
+  // on Postgres across instances, and on SQLite within its write transaction.
+  await database.prepare(
+    `INSERT INTO settings (key, value)
+     VALUES ('report_reference_counter', CAST((SELECT COUNT(*) FROM reports) AS TEXT))
+     ON CONFLICT (key) DO NOTHING`,
+  ).run();
+  const { value } = (await database.prepare(
+    `UPDATE settings SET value = CAST(CAST(value AS BIGINT) + 1 AS TEXT)
+     WHERE key = 'report_reference_counter' RETURNING value`,
+  ).get()) as { value: string };
+  return `CS-${new Date().getFullYear()}-${value.padStart(4, "0")}`;
 }
 
 async function notifyReporterOfReport(
@@ -439,7 +459,6 @@ export function createReportsRouter(deps: {
 
       const now = Date.now();
       const reportId = randomUUID();
-      const referenceCode = await nextReferenceCode(database);
 
       const file = request.file;
       const storedPhoto = file
@@ -447,6 +466,7 @@ export function createReportsRouter(deps: {
         : null;
 
       await database.transaction(async () => {
+        const referenceCode = await nextReferenceCode(database);
         await database
           .prepare(
             `INSERT INTO reports
@@ -500,6 +520,15 @@ export function createReportsRouter(deps: {
           title: `New report: ${input.title}`,
           message: `${referenceCode} was submitted to ${category.name} and needs review.`,
         });
+      }, async () => {
+        if (storedPhoto) {
+          try {
+            await photos.remove(storedPhoto.storedName);
+          } catch {
+            // Do not mask the persistence failure or log private storage details.
+            console.error("Photo cleanup failed after report persistence rolled back.");
+          }
+        }
       });
 
       const row = await loadReport(database, reportId);
