@@ -13,6 +13,35 @@ function buildApp(): Promise<App> {
   return createProductionApp().then(({ app }) => app);
 }
 
+function dispatch(app: App, request: Request, response: Response): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      response.removeListener("finish", onFinish);
+      response.removeListener("close", onFinish);
+      response.removeListener("error", onError);
+    };
+    const onFinish = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    // Keep the Vercel invocation alive until Express finishes its async route.
+    response.once("finish", onFinish);
+    response.once("close", onFinish);
+    response.once("error", onError);
+    try {
+      app(request, response);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
 export default async function handler(request: Request, response: Response): Promise<void> {
   try {
     appPromise ??= buildApp().catch((error: unknown) => {
@@ -21,11 +50,13 @@ export default async function handler(request: Request, response: Response): Pro
       throw error;
     });
     const app = await appPromise;
-    app(request, response);
+    await dispatch(app, request, response);
   } catch (error) {
     console.error(error);
-    response
-      .status(500)
-      .json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred." } });
+    if (!response.headersSent && !response.writableEnded) {
+      response
+        .status(500)
+        .json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred." } });
+    }
   }
 }

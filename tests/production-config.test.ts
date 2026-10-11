@@ -21,6 +21,16 @@ describe("production configuration", () => {
     });
   });
 
+  it("uses CONNECTION_STRING as the primary Postgres URL", () => {
+    const suppliedConnection = "postgresql://postgres:password@db.example.supabase.co:5432/postgres";
+
+    expect(productionConfig({
+      CONNECTION_STRING: suppliedConnection,
+      DATABASE_URL,
+      BLOB_READ_WRITE_TOKEN: "test",
+    })).toMatchObject({ connectionString: suppliedConnection });
+  });
+
   it("keeps existing Postgres/Blob deployments working and permits an explicit choice", () => {
     expect(productionConfig({ POSTGRES_URL: DATABASE_URL, BLOB_READ_WRITE_TOKEN: "test" })
       .photos.provider).toBe("blob");
@@ -31,7 +41,7 @@ describe("production configuration", () => {
   });
 
   it("identifies missing SQL/storage credentials instead of using a public key as authorization", () => {
-    expect(() => productionConfig({ NEXT_PUBLIC_SUPABASE_URL })).toThrow("DATABASE_URL is required");
+    expect(() => productionConfig({ NEXT_PUBLIC_SUPABASE_URL })).toThrow("CONNECTION_STRING is required");
     expect(() => productionConfig({ DATABASE_URL: NEXT_PUBLIC_SUPABASE_URL })).toThrow("Postgres connection string");
     expect(() => productionConfig({ DATABASE_URL })).toThrow("BLOB_READ_WRITE_TOKEN");
     expect(() => productionConfig({
