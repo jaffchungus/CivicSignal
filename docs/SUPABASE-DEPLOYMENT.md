@@ -6,7 +6,7 @@ CivicSignal is a React 19 / Vite 7 SPA backed by Express 5, not Next.js. It uses
 
 Accounts, bcrypt password hashes, HTTP-only `civicsignal_session` cookies, administrator verification, and organization/report authorization remain unchanged. The browser calls Express. Do not add Supabase Auth sessions or Next.js cookie-refresh middleware alongside this authentication system. `@supabase/ssr` is not needed or installed; the used SDK is `@supabase/supabase-js`, exclusively on the server.
 
-The existing `CivicDatabase` Postgres adapter connects to Supabase via `DATABASE_URL`. Queries use unnamed parameters, compatible with Supabase transaction pooling. Local development/tests retain SQLite unless a connection string is explicitly supplied. The standalone entry loads `.env.local` then `.env` using Node's native environment loader; process environment values take precedence.
+The existing `CivicDatabase` Postgres adapter connects to Supabase via `CONNECTION_STRING` (`DATABASE_URL` and `POSTGRES_URL` remain supported as fallbacks). Queries use unnamed parameters, compatible with Supabase transaction pooling. Local development/tests retain SQLite unless a connection string is explicitly supplied. The standalone entry loads `.env.local` then `.env` using Node's native environment loader; process environment values take precedence.
 
 `SupabasePhotoStore` implements the existing photo adapter with a **private** bucket. The server uploads using a server-only secret and issues five-minute signed URLs only after report authorization succeeds. A signed URL is a temporary bearer capability: anyone given the URL can use it until it expires. Existing Vercel Blob attachment URLs remain readable when switching storage. Existing Postgres/Blob deployments also remain supported with `PHOTO_STORAGE=blob`.
 
@@ -16,7 +16,7 @@ The supplied project URL and publishable key are in the ignored `.env.local` and
 
 Set these in Vercel's environment settings (not source control):
 
-- `DATABASE_URL`: copy **Connect → Transaction pooler** from the supplied Supabase project; include the actual database password, percent-encoding special characters. Use SSL (`sslmode=require` at minimum; prefer certificate verification). Do not guess the pooler host or substitute the Supabase API URL.
+- `CONNECTION_STRING`: set this in Vercel to the Postgres URI from Supabase **Connect** and include the actual database password, percent-encoding special characters. The direct `db.<project-ref>.supabase.co:5432` URI you supplied is accepted. For Vercel serverless, Supabase recommends its **Transaction pooler** URI; direct database hosts are IPv6-only unless the project has the IPv4 add-on. Use the exact host and port shown by Supabase, and include SSL (`sslmode=require` at minimum; prefer certificate verification). Do not substitute the Supabase API URL.
 - `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`: `https://zocubotkhlkrtbyyheiu.supabase.co`.
 - `SUPABASE_SECRET_KEY`: a server-only secret from **Settings → API Keys**. Legacy `SUPABASE_SERVICE_ROLE_KEY` is supported if already provisioned. Never use a `VITE_` or `NEXT_PUBLIC_` prefix for a privileged credential.
 - `PHOTO_STORAGE=supabase`.

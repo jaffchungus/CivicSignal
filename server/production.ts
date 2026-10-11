@@ -7,13 +7,14 @@ import { createSupabaseServerClient } from "./supabase";
 type Environment = Record<string, string | undefined>;
 
 export function productionConfig(environment: Environment = process.env) {
-  const connectionString = environment.DATABASE_URL || environment.POSTGRES_URL;
+  const connectionString =
+    environment.CONNECTION_STRING || environment.DATABASE_URL || environment.POSTGRES_URL;
   if (!connectionString) {
-    throw new Error("DATABASE_URL is required. Use the Supabase transaction-pooler connection string with the database password.");
+    throw new Error("CONNECTION_STRING is required. Use the Supabase Postgres connection string with the database password.");
   }
   const parsedConnection = new URL(connectionString);
   if (!["postgres:", "postgresql:"].includes(parsedConnection.protocol)) {
-    throw new Error("DATABASE_URL must be a Postgres connection string, not a Supabase API URL.");
+    throw new Error("CONNECTION_STRING must be a Postgres connection string, not a Supabase API URL.");
   }
   const secretKey = environment.SUPABASE_SECRET_KEY || environment.SUPABASE_SERVICE_ROLE_KEY;
   const provider = environment.PHOTO_STORAGE || (secretKey ? "supabase" : "blob");

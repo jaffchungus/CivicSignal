@@ -1,4 +1,4 @@
-// Standalone entry: SQLite/disk by default; external storage when DATABASE_URL
+// Standalone entry: SQLite/disk by default; external storage when CONNECTION_STRING
 // is set. Serves the built client. Vercel uses api/index.ts instead.
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -29,7 +29,7 @@ async function localApp() {
   return createApp({ database, photos: new DiskPhotoStore(uploadDirectory), sessionTtlDays });
 }
 
-const { app, close } = process.env.DATABASE_URL || process.env.POSTGRES_URL
+const { app, close } = process.env.CONNECTION_STRING || process.env.DATABASE_URL || process.env.POSTGRES_URL
   ? await createProductionApp()
   : await localApp();
 
