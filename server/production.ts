@@ -6,11 +6,29 @@ import { createSupabaseServerClient } from "./supabase";
 
 type Environment = Record<string, string | undefined>;
 
-export function productionConfig(environment: Environment = process.env) {
-  const connectionString =
+const SUPABASE_DATABASE_HOST = "db.zocubotkhlkrtbyyheiu.supabase.co";
+
+function encodePassword(password: string): string {
+  return encodeURIComponent(password).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+export function productionConnectionString(environment: Environment = process.env): string | undefined {
+  const configuredConnection =
     environment.CONNECTION_STRING || environment.DATABASE_URL || environment.POSTGRES_URL;
+  if (configuredConnection) return configuredConnection;
+
+  const password = environment.DB_PASSWORD;
+  if (!password) return undefined;
+
+  return `postgresql://postgres:${encodePassword(password)}@${SUPABASE_DATABASE_HOST}:5432/postgres?sslmode=require`;
+}
+
+export function productionConfig(environment: Environment = process.env) {
+  const connectionString = productionConnectionString(environment);
   if (!connectionString) {
-    throw new Error("CONNECTION_STRING is required. Use the Supabase Postgres connection string with the database password.");
+    throw new Error("CONNECTION_STRING or DB_PASSWORD is required. Use the Supabase Postgres connection details with the database password.");
   }
   const parsedConnection = new URL(connectionString);
   if (!["postgres:", "postgresql:"].includes(parsedConnection.protocol)) {

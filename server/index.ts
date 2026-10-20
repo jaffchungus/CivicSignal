@@ -29,7 +29,7 @@ async function localApp() {
   return createApp({ database, photos: new DiskPhotoStore(uploadDirectory), sessionTtlDays });
 }
 
-const { app, close } = process.env.CONNECTION_STRING || process.env.DATABASE_URL || process.env.POSTGRES_URL
+const { app, close } = process.env.CONNECTION_STRING || process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.DB_PASSWORD
   ? await createProductionApp()
   : await localApp();
 
