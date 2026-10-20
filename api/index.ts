@@ -3,14 +3,18 @@
 // Vercel's CDN from outputDirectory (see vercel.json).
 import type { Request, Response } from "express";
 
-import { createProductionApp } from "../server/production";
-
-type App = Awaited<ReturnType<typeof createProductionApp>>["app"];
+type ProductionModule = typeof import("../server/production");
+type App = Awaited<ReturnType<ProductionModule["createProductionApp"]>>["app"];
 
 let appPromise: Promise<App> | undefined;
 
-function buildApp(): Promise<App> {
-  return createProductionApp().then(({ app }) => app);
+async function buildApp(): Promise<App> {
+  // Defer application imports until inside handler's try/catch. A dependency
+  // evaluation or environment-specific module error must not crash the
+  // serverless function before it can return a diagnostic response.
+  const { createProductionApp } = await import("../server/production");
+  const { app } = await createProductionApp();
+  return app;
 }
 
 /**
@@ -78,7 +82,7 @@ export default async function handler(request: Request, response: Response): Pro
     const app = await appPromise;
     await dispatch(app, request, response);
   } catch (error) {
-    console.error(error);
+    console.error("[api/index] Failed to initialize or dispatch the API request:", error);
     if (!response.headersSent && !response.writableEnded) {
       response
         .status(500)
