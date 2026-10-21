@@ -2,15 +2,16 @@
 // every /api request is handed to Express; the client bundle is served by
 // Vercel's CDN from outputDirectory (see vercel.json).
 import type { Request, Response } from "express";
-import { createProductionApp } from "../server/production";
 
-type App = Awaited<ReturnType<typeof createProductionApp>>["app"];
+type ProductionModule = typeof import("../server/production");
+type App = Awaited<ReturnType<ProductionModule["createProductionApp"]>>["app"];
 
 let appPromise: Promise<App> | undefined;
 
 async function buildApp(): Promise<App> {
-  // Keep the import static so Vercel bundles the complete local server graph
-  // into this function instead of resolving a relative JS module at runtime.
+  // Keep app initialization inside the handler so startup failures can be
+  // reported through the sanitized API error response below.
+  const { createProductionApp } = await import("../server/production");
   const { app } = await createProductionApp();
   return app;
 }
