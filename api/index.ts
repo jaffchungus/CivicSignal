@@ -79,6 +79,14 @@ function safeStartupDiagnostic(error: unknown): string {
   }
 
   const code = (error as { code?: unknown } | null)?.code;
+  if (code === "ERR_MODULE_NOT_FOUND") {
+    const missingPackage = message.match(/Cannot find package ['"]([^'"]+)['"]/i)?.[1];
+    if (missingPackage) return `MISSING_PACKAGE:${missingPackage}`;
+    const missingModule = message.match(/Cannot find module ['"]([^'"]+)['"]/i)?.[1];
+    if (missingModule) {
+      return `MISSING_MODULE:${missingModule.split(/[\\/]/).at(-1)}`;
+    }
+  }
   if (typeof code === "string" && /^[a-z0-9_]{2,40}$/i.test(code)) {
     return code.toUpperCase();
   }
