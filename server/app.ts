@@ -7,14 +7,14 @@ import helmet from "helmet";
 import multer from "multer";
 import { z } from "zod";
 
-import type { CivicDatabase } from "./database";
-import { ApiError, sendError } from "./http";
-import type { PhotoStore } from "./photo-store";
-import { createAuthRouter } from "./routes/auth";
-import { createCatalogRouter } from "./routes/catalog";
-import { createAdminRouter } from "./routes/admin";
-import { createNotificationsRouter } from "./routes/notifications";
-import { createReportsRouter } from "./routes/reports";
+import type { CivicDatabase } from "./database.js";
+import { ApiError, sendError } from "./http.js";
+import type { PhotoStore } from "./photo-store.js";
+import { createAuthRouter } from "./routes/auth.js";
+import { createCatalogRouter } from "./routes/catalog.js";
+import { createAdminRouter } from "./routes/admin.js";
+import { createNotificationsRouter } from "./routes/notifications.js";
+import { createReportsRouter } from "./routes/reports.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_SESSION_TTL_DAYS = 7;

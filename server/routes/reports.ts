@@ -14,17 +14,17 @@ import {
   type OrganizationKind,
   type ReportStatus,
   type UserRole,
-} from "../../shared/contracts";
-import type { CivicDatabase } from "../database";
+} from "../../shared/contracts.js";
+import type { CivicDatabase } from "../database.js";
 import {
   createNotification,
   notifyOrganization,
   recordAudit,
   recordReportEvent,
-} from "../activity";
-import { ApiError, isoTime, pathId } from "../http";
-import type { PhotoStore } from "../photo-store";
-import { authenticate, currentUser, requireRole, requireStaff } from "../session";
+} from "../activity.js";
+import { ApiError, isoTime, pathId } from "../http.js";
+import type { PhotoStore } from "../photo-store.js";
+import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
 
 const ATTACHMENT_LIMIT_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set([

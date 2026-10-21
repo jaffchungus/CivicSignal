@@ -1,8 +1,8 @@
 import { Router } from "express";
 
-import type { CivicDatabase } from "../database";
-import { ApiError, isoTime } from "../http";
-import { authenticate, currentUser } from "../session";
+import type { CivicDatabase } from "../database.js";
+import { ApiError, isoTime } from "../http.js";
+import { authenticate, currentUser } from "../session.js";
 
 type NotificationRow = {
   id: string;

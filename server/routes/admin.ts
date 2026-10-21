@@ -9,12 +9,12 @@ import {
   USER_ROLES,
   type OrganizationKind,
   type UserRole,
-} from "../../shared/contracts";
-import type { CivicDatabase } from "../database";
-import { recordAudit } from "../activity";
-import { ApiError, isoTime } from "../http";
-import { authenticate, currentUser, requireRole } from "../session";
-import { findUser, serializeAdminUser, USER_SELECT, type UserRow } from "../users";
+} from "../../shared/contracts.js";
+import type { CivicDatabase } from "../database.js";
+import { recordAudit } from "../activity.js";
+import { ApiError, isoTime } from "../http.js";
+import { authenticate, currentUser, requireRole } from "../session.js";
+import { findUser, serializeAdminUser, USER_SELECT, type UserRow } from "../users.js";
 
 const verifySchema = z.object({
   role: z.enum(USER_ROLES),

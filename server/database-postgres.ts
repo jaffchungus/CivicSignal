@@ -7,7 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { Pool, types, type PoolClient } from "pg";
 
-import type { CivicDatabase, CivicStatement } from "./database";
+import type { CivicDatabase, CivicStatement } from "./database.js";
 
 const POSTGRES_SCHEMA = `
     CREATE TABLE IF NOT EXISTS settings (

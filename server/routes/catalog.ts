@@ -2,9 +2,9 @@
 // (for report creation).
 import { Router } from "express";
 
-import type { OrganizationKind } from "../../shared/contracts";
-import type { CivicDatabase } from "../database";
-import { authenticate } from "../session";
+import type { OrganizationKind } from "../../shared/contracts.js";
+import type { CivicDatabase } from "../database.js";
+import { authenticate } from "../session.js";
 
 export function createCatalogRouter(deps: { database: CivicDatabase }): Router {
   const { database } = deps;

@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { ApiError } from "./http";
-import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store";
+import { ApiError } from "./http.js";
+import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store.js";
 
 const SIGNED_URL_TTL_SECONDS = 5 * 60;
 

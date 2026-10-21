@@ -9,18 +9,18 @@ import {
   REQUESTABLE_ROLES,
   type OrganizationKind,
   type UserRole,
-} from "../../shared/contracts";
-import type { CivicDatabase } from "../database";
-import { ApiError, sendError } from "../http";
+} from "../../shared/contracts.js";
+import type { CivicDatabase } from "../database.js";
+import { ApiError, sendError } from "../http.js";
 import {
   authenticate,
   createSession,
   currentUser,
   destroySession,
   userForSessionToken,
-} from "../session";
-import { recordAudit } from "../activity";
-import { findUser } from "../users";
+} from "../session.js";
+import { recordAudit } from "../activity.js";
+import { findUser } from "../users.js";
 
 const setupSchema = z.object({
   municipalityName: z.string().trim().min(2).max(120),

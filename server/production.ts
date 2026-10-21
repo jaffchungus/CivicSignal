@@ -1,10 +1,10 @@
-import { createApp } from "./app";
-import { createPostgresDatabase } from "./database-postgres";
-import { ApiError } from "./http";
-import { BlobPhotoStore } from "./photo-blob";
-import { SupabasePhotoStore } from "./photo-supabase";
-import type { PhotoStore, StoredPhoto } from "./photo-store";
-import { createSupabaseServerClient } from "./supabase";
+import { createApp } from "./app.js";
+import { createPostgresDatabase } from "./database-postgres.js";
+import { ApiError } from "./http.js";
+import { BlobPhotoStore } from "./photo-blob.js";
+import { SupabasePhotoStore } from "./photo-supabase.js";
+import type { PhotoStore, StoredPhoto } from "./photo-store.js";
+import { createSupabaseServerClient } from "./supabase.js";
 
 type Environment = Record<string, string | undefined>;
 

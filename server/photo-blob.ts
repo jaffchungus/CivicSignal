@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { del, put } from "@vercel/blob";
 
-import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store";
+import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store.js";
 
 export class BlobPhotoStore implements PhotoStore {
   save(buffer: Buffer, originalName: string, contentType: string): Promise<StoredPhoto> {

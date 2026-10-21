@@ -5,10 +5,10 @@ import path from "node:path";
 
 import express from "express";
 
-import { createApp } from "./app";
-import { createSqliteDatabase } from "./database-sqlite";
-import { DiskPhotoStore } from "./photo-store";
-import { createProductionApp } from "./production";
+import { createApp } from "./app.js";
+import { createSqliteDatabase } from "./database-sqlite.js";
+import { DiskPhotoStore } from "./photo-store.js";
+import { createProductionApp } from "./production.js";
 
 // Node's native loader keeps existing process environment values authoritative.
 for (const filename of [".env.local", ".env"]) {

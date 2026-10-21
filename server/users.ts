@@ -1,8 +1,8 @@
 // User data: rows, lookup, and serialization. The single owner of the user
 // projection — every API response that exposes a user goes through here.
-import type { PublicUser, UserRole } from "../shared/contracts";
-import type { CivicDatabase } from "./database";
-import { isoTime } from "./http";
+import type { PublicUser, UserRole } from "../shared/contracts.js";
+import type { CivicDatabase } from "./database.js";
+import { isoTime } from "./http.js";
 
 export type UserRow = {
   id: string;

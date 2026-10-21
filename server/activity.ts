@@ -2,7 +2,7 @@
 // report history, and notifications are written only through this module.
 import { randomUUID } from "node:crypto";
 
-import type { CivicDatabase } from "./database";
+import type { CivicDatabase } from "./database.js";
 
 export async function recordAudit(
   database: CivicDatabase,

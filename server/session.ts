@@ -4,10 +4,10 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { Request, RequestHandler, Response } from "express";
 
-import { isStaffRole, type PublicUser, type UserRole } from "../shared/contracts";
-import type { CivicDatabase } from "./database";
-import { ApiError } from "./http";
-import { findUser } from "./users";
+import { isStaffRole, type PublicUser, type UserRole } from "../shared/contracts.js";
+import type { CivicDatabase } from "./database.js";
+import { ApiError } from "./http.js";
+import { findUser } from "./users.js";
 
 declare global {
   namespace Express {

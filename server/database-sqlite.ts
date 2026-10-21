@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import Database from "better-sqlite3";
 
-import type { CivicDatabase, CivicStatement } from "./database";
+import type { CivicDatabase, CivicStatement } from "./database.js";
 
 const SQLITE_SCHEMA = `
     CREATE TABLE IF NOT EXISTS settings (
