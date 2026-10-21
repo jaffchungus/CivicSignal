@@ -9,6 +9,12 @@ import { createSupabaseServerClient } from "./supabase";
 type Environment = Record<string, string | undefined>;
 
 const SUPABASE_DATABASE_HOST = "db.zocubotkhlkrtbyyheiu.supabase.co";
+const SUPABASE_PROJECT_REF = "zocubotkhlkrtbyyheiu";
+// This Supabase project resolves its direct database host to IPv6. Vercel
+// Functions are IPv4-only, so use Supavisor's IPv4 transaction pooler there.
+// The exact host can be overridden with SUPABASE_DB_POOLER_HOST if Supabase
+// assigns the project to a different pooler cluster.
+const SUPABASE_DATABASE_REGION = "us-east-2";
 
 function encodePassword(password: string): string {
   return encodeURIComponent(password).replace(/[!'()*]/g, (character) =>
@@ -37,6 +43,31 @@ function requiredConnectionString(environment: Environment): string {
     throw new Error("CONNECTION_STRING must be a Postgres connection string, not a Supabase API URL.");
   }
   return connectionString;
+}
+
+function supabasePoolerConnectionStrings(connectionString: string, environment: Environment): string[] {
+  if (!environment.VERCEL) return [connectionString];
+
+  const directUrl = new URL(connectionString);
+  if (directUrl.hostname !== SUPABASE_DATABASE_HOST) return [connectionString];
+
+  const poolerHosts = environment.SUPABASE_DB_POOLER_HOST
+    ? [environment.SUPABASE_DB_POOLER_HOST]
+    : [0, 1].map((index) => `aws-${index}-${SUPABASE_DATABASE_REGION}.pooler.supabase.com`);
+
+  return poolerHosts.map((host) => {
+    const poolerUrl = new URL(connectionString);
+    const username = decodeURIComponent(poolerUrl.username);
+    poolerUrl.username = username === "postgres" || !username.endsWith(`.${SUPABASE_PROJECT_REF}`)
+      ? `${username}.${SUPABASE_PROJECT_REF}`
+      : username;
+    poolerUrl.hostname = host;
+    poolerUrl.port = "6543";
+    if (!poolerUrl.searchParams.has("sslmode")) {
+      poolerUrl.searchParams.set("sslmode", "require");
+    }
+    return poolerUrl.toString();
+  });
 }
 
 function productionPhotoConfig(environment: Environment) {
@@ -93,7 +124,17 @@ export async function createProductionApp() {
   // Photo storage is optional: its missing credentials or an unavailable
   // bucket must not take signup, sign-in, and catalog APIs offline.
   const connectionString = requiredConnectionString(process.env);
-  const database = await createPostgresDatabase(connectionString);
+  let database: Awaited<ReturnType<typeof createPostgresDatabase>> | undefined;
+  let databaseError: unknown;
+  for (const candidate of supabasePoolerConnectionStrings(connectionString, process.env)) {
+    try {
+      database = await createPostgresDatabase(candidate);
+      break;
+    } catch (error) {
+      databaseError = error;
+    }
+  }
+  if (!database) throw databaseError;
 
   let photos: PhotoStore;
   try {
