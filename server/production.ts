@@ -45,11 +45,30 @@ function requiredConnectionString(environment: Environment): string {
   return connectionString;
 }
 
+function configureSupabaseTls(url: URL): void {
+  if (!url.searchParams.has("sslmode")) {
+    url.searchParams.set("sslmode", "require");
+  }
+  // pg-connection-string 2.x treats `require` as verify-full unless libpq
+  // compatibility is enabled. Supabase documents `require` as encrypted
+  // transport without CA verification.
+  if (url.searchParams.get("sslmode") === "require") {
+    url.searchParams.set("uselibpqcompat", "true");
+  }
+}
+
 function supabasePoolerConnectionStrings(connectionString: string, environment: Environment): string[] {
   if (!environment.VERCEL) return [connectionString];
 
   const directUrl = new URL(connectionString);
-  if (directUrl.hostname !== SUPABASE_DATABASE_HOST) return [connectionString];
+  const isDirectSupabaseConnection = directUrl.hostname === SUPABASE_DATABASE_HOST;
+  const isSupavisorConnection = directUrl.hostname.endsWith(".pooler.supabase.com");
+  if (!isDirectSupabaseConnection && !isSupavisorConnection) return [connectionString];
+
+  if (isSupavisorConnection) {
+    configureSupabaseTls(directUrl);
+    return [directUrl.toString()];
+  }
 
   const poolerHosts = environment.SUPABASE_DB_POOLER_HOST
     ? [environment.SUPABASE_DB_POOLER_HOST]
@@ -63,9 +82,7 @@ function supabasePoolerConnectionStrings(connectionString: string, environment: 
       : username;
     poolerUrl.hostname = host;
     poolerUrl.port = "6543";
-    if (!poolerUrl.searchParams.has("sslmode")) {
-      poolerUrl.searchParams.set("sslmode", "require");
-    }
+    configureSupabaseTls(poolerUrl);
     return poolerUrl.toString();
   });
 }
