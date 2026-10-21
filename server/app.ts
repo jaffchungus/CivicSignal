@@ -26,6 +26,21 @@ type AppOptions = {
   sessionTtlDays?: number;
 };
 
+function safeErrorDiagnostic(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("CONNECTION_STRING or DB_PASSWORD is required")) {
+    return "MISSING_DATABASE_CONFIG";
+  }
+  if (message.includes("must be a Postgres connection string")) {
+    return "INVALID_DATABASE_URL";
+  }
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && /^[a-z0-9_]{2,40}$/i.test(code)) {
+    return code.toUpperCase();
+  }
+  return "API_REQUEST_FAILED";
+}
+
 export function createApp(options: AppOptions) {
   const { database, photos } = options;
   const secureCookies = options.secureCookies ?? process.env.NODE_ENV === "production";
@@ -101,7 +116,13 @@ export function createApp(options: AppOptions) {
       return;
     }
     console.error(error);
-    sendError(response, 500, "INTERNAL_ERROR", "An unexpected error occurred.");
+    response.status(500).json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "An unexpected error occurred.",
+        diagnostic: safeErrorDiagnostic(error),
+      },
+    });
   });
 
   return {
