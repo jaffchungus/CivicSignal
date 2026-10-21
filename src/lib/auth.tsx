@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import type { PublicUser, SessionResponse, SetupStatus } from "../../shared/contracts";
-import { api } from "./api";
+import { api, errorDetails } from "./api";
 
 type SignUpInput = {
   displayName: string;
@@ -23,8 +23,11 @@ type AuthContextValue = {
   user: PublicUser | null;
   setupRequired: boolean;
   loading: boolean;
+  loadError: string | null;
+  sessionExpired: boolean;
   signIn: (email: string, password: string) => Promise<PublicUser>;
   signUp: (input: SignUpInput) => Promise<PublicUser>;
+  completeSetup: (user: PublicUser) => void;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -35,14 +38,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<PublicUser | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [session, setup] = await Promise.all([
-      api.get<SessionResponse>("/api/auth/session"),
-      api.get<SetupStatus>("/api/setup/status"),
-    ]);
-    setUser(session.user);
-    setSetupRequired(setup.setupRequired);
+    setLoadError(null);
+    try {
+      const [session, setup] = await Promise.all([
+        api.get<SessionResponse>("/api/auth/session"),
+        api.get<SetupStatus>("/api/setup/status"),
+      ]);
+      setUser(session.user);
+      setSetupRequired(setup.setupRequired);
+      setSessionExpired(false);
+    } catch (error) {
+      setLoadError(errorDetails(error).message);
+      throw error;
+    }
+  }, []);
+
+  useEffect(() => {
+    const expireSession = () => {
+      setUser(null);
+      setSessionExpired(true);
+    };
+    window.addEventListener("civicsignal:session-expired", expireSession);
+    return () => window.removeEventListener("civicsignal:session-expired", expireSession);
   }, []);
 
   useEffect(() => {
@@ -60,23 +81,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password,
     });
     setUser(body.user);
+    setSessionExpired(false);
     return body.user;
   }, []);
 
   const signUp = useCallback(async (input: SignUpInput) => {
     const body = await api.post<{ user: PublicUser }>("/api/auth/register", input);
     setUser(body.user);
+    setSessionExpired(false);
     return body.user;
   }, []);
 
   const signOut = useCallback(async () => {
     await api.post("/api/auth/logout");
     setUser(null);
+    setSessionExpired(false);
+  }, []);
+
+  const completeSetup = useCallback((nextUser: PublicUser) => {
+    setUser(nextUser);
+    setSetupRequired(false);
+    setLoadError(null);
+    setSessionExpired(false);
   }, []);
 
   const value = useMemo(
-    () => ({ user, setupRequired, loading, signIn, signUp, signOut, refresh }),
-    [user, setupRequired, loading, signIn, signUp, signOut, refresh],
+    () => ({ user, setupRequired, loading, loadError, sessionExpired, signIn, signUp, signOut, completeSetup, refresh }),
+    [user, setupRequired, loading, loadError, sessionExpired, signIn, signUp, signOut, completeSetup, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

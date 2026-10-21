@@ -168,7 +168,7 @@ it("rejects reads and submissions after failed SQLite rollback while a safe conn
   expect(recovered.body.referenceCode).toBe(`CS-${new Date().getFullYear()}-0002`);
   expect((await request(secondApp).get("/api/reports?scope=mine").set("Cookie", cookie).expect(200)).body.total).toBe(2);
   for (const report of [existing.body, recovered.body]) {
-    const served = await request(secondApp).get(report.attachments[0].url).expect(200);
+    const served = await request(secondApp).get(report.attachments[0].url).set("Cookie", cookie).expect(200);
     expect(Buffer.compare(served.body, PNG)).toBe(0);
   }
   expect(remove).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe.each(["sqlite", "postgres"] as const)("report persistence (%s)", (adapt
       const detail = await owner.get(`/api/reports/${result.body.id}`).expect(200);
       expect(detail.body.attachments).toEqual(result.body.attachments);
       expect(detail.body.timeline).toHaveLength(1);
-      const served = await request(app).get(result.body.attachments[0].url).expect(200);
+      const served = await owner.get(result.body.attachments[0].url).expect(200);
       expect(Buffer.compare(served.body, PNG)).toBe(0);
     }
     expect((await owner.get("/api/reports?scope=mine").expect(200)).body.total).toBe(2);
@@ -304,7 +304,7 @@ describe.each(["sqlite", "postgres"] as const)("report persistence (%s)", (adapt
         expect(detail.body.attachments).toHaveLength(1);
         expect(await database.prepare("SELECT stored_name FROM attachments").get())
           .toEqual({ stored_name: files[0] });
-        const served = await request(app).get(detail.body.attachments[0].url).expect(200);
+        const served = await owner.get(detail.body.attachments[0].url).expect(200);
         expect(Buffer.compare(served.body, PNG)).toBe(0);
         await request(app).get(`/api/reports/${detail.body.id}`).expect(401);
       }
@@ -334,7 +334,7 @@ describe.each(["sqlite", "postgres"] as const)("report persistence (%s)", (adapt
     const detail = await owner.get(`/api/reports/${list.body.reports[0].id}`).expect(200);
     expect(detail.body.attachments).toHaveLength(1);
     expect(await readdir(uploadDirectory)).toHaveLength(1);
-    const served = await request(app).get(detail.body.attachments[0].url).expect(200);
+    const served = await owner.get(detail.body.attachments[0].url).expect(200);
     expect(Buffer.compare(served.body, PNG)).toBe(0);
   }, 15_000);
 

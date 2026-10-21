@@ -61,20 +61,6 @@ function normalizedEmail(email: string): string {
   return email.trim().toLocaleLowerCase("en-US");
 }
 
-const DEFAULT_ORGANIZATIONS = [
-  { key: "publicWorks", name: "Public Works", kind: "PUBLIC_SERVICE" },
-  { key: "parks", name: "Parks and Recreation", kind: "PUBLIC_SERVICE" },
-  { key: "police", name: "Police Department", kind: "LAW_ENFORCEMENT" },
-] as const;
-
-const DEFAULT_CATEGORIES = [
-  ["Roads and Sidewalks", "Potholes, damaged sidewalks, and road hazards", "publicWorks"],
-  ["Streetlights", "Broken or malfunctioning public streetlights", "publicWorks"],
-  ["Trash and Sanitation", "Missed collection, dumping, and public waste", "publicWorks"],
-  ["Parks and Recreation", "Maintenance issues in parks and public recreation areas", "parks"],
-  ["Non-Emergency Public Safety", "Non-emergency concerns appropriate for local police", "police"],
-] as const;
-
 export function createAuthRouter(deps: {
   database: CivicDatabase;
   secureCookies: boolean;
@@ -127,33 +113,6 @@ export function createAuthRouter(deps: {
           .prepare("INSERT INTO settings (key, value) VALUES ('municipality_name', ?)")
           .run(input.municipalityName);
 
-        const organizationIds = new Map<string, string>();
-        const insertOrganization = database.prepare(
-          `INSERT INTO organizations (id, name, kind, active, created_at, updated_at)
-           VALUES (?, ?, ?, 1, ?, ?)`,
-        );
-        for (const organization of DEFAULT_ORGANIZATIONS) {
-          const id = randomUUID();
-          organizationIds.set(organization.key, id);
-          await insertOrganization.run(id, organization.name, organization.kind, now, now);
-        }
-
-        const insertCategory = database.prepare(
-          `INSERT INTO categories
-            (id, name, description, organization_id, active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 1, ?, ?)`,
-        );
-        for (const [name, description, organizationKey] of DEFAULT_CATEGORIES) {
-          await insertCategory.run(
-            randomUUID(),
-            name,
-            description,
-            organizationIds.get(organizationKey),
-            now,
-            now,
-          );
-        }
-
         await recordAudit(database, {
           actorUserId: adminId,
           action: "SYSTEM_INITIALIZED",
@@ -172,28 +131,10 @@ export function createAuthRouter(deps: {
 
       await createSession(database, response, adminId, secureCookies, sessionDurationMs);
       const user = await findUser(database, adminId);
-      const organizations = (await database
-        .prepare(`SELECT id, name, kind, active FROM organizations ORDER BY name`)
-        .all()) as Array<{ id: string; name: string; kind: OrganizationKind; active: number }>;
-      const categories = await database
-        .prepare(
-          `SELECT categories.id, categories.name, categories.description,
-                  categories.organization_id AS "organizationId",
-                  organizations.name AS "organizationName"
-           FROM categories
-           JOIN organizations ON organizations.id = categories.organization_id
-           ORDER BY categories.name`,
-        )
-        .all();
       response.status(201).json({
         user,
-        organizations: organizations.map((organization) => ({
-          id: organization.id,
-          name: organization.name,
-          kind: organization.kind,
-          active: organization.active === 1,
-        })),
-        categories,
+        organizations: [],
+        categories: [],
       });
     } catch (error) {
       next(error);

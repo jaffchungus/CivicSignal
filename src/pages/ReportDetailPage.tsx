@@ -28,6 +28,21 @@ function timelineText(entry: ReportTimelineEntry): string {
   return entry.message ?? ACTION_LABELS[entry.action ?? ""] ?? "Update";
 }
 
+function statusGuidance(status: ReportStatus): string {
+  switch (status) {
+    case "SUBMITTED":
+      return "The report has been sent to the configured organization and is waiting for an official to review it.";
+    case "UNDER_REVIEW":
+      return "An official is reviewing the report and deciding what action is appropriate.";
+    case "IN_PROGRESS":
+      return "The organization has marked this report as in progress. Check the updates below for details.";
+    case "RESOLVED":
+      return "The organization has marked this issue as resolved. If the issue remains, contact the organization through its usual public channels.";
+    case "CLOSED":
+      return "The report is closed. Its history and any official updates remain available here.";
+  }
+}
+
 export function ReportDetailPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const {
@@ -38,6 +53,7 @@ export function ReportDetailPage() {
   const {
     pending: busy,
     error: actionError,
+    fieldErrors: actionFieldErrors,
     notice,
     run: runAction,
   } = useAction();
@@ -77,7 +93,7 @@ export function ReportDetailPage() {
       <div className="card">
         <div className="detail-header">
           <div>
-            <span className="reference">{report.referenceCode}</span>
+            <span className="reference">Reference {report.referenceCode ?? "unavailable"}</span>
             <h1>{report.title}</h1>
             <p className="muted">
               {report.category.name} · {report.organization?.name} ·{" "}
@@ -86,6 +102,7 @@ export function ReportDetailPage() {
           </div>
           <StatusBadge status={report.status} />
         </div>
+        <p className="status-guidance">{statusGuidance(report.status)}</p>
 
         <dl className="meta-grid">
           <div>
@@ -165,20 +182,22 @@ export function ReportDetailPage() {
                     progresses.
                   </p>
                   <div className="button-row">
-                    <select
-                      className="select"
-                      value={nextStatus}
-                      onChange={(event) =>
-                        setNextStatus(event.target.value as ReportStatus)
-                      }
-                    >
-                      <option value="">Choose the next status…</option>
-                      {(report.allowedTransitions ?? []).map((status) => (
-                        <option key={status} value={status}>
-                          {reportStatusLabel(status)}
-                        </option>
-                      ))}
-                    </select>
+                    <Field label="Next status" className="transition-field">
+                      <select
+                        className="select"
+                        value={nextStatus}
+                        onChange={(event) =>
+                          setNextStatus(event.target.value as ReportStatus)
+                        }
+                      >
+                        <option value="">Choose the next status…</option>
+                        {(report.allowedTransitions ?? []).map((status) => (
+                          <option key={status} value={status}>
+                            {reportStatusLabel(status)}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                     <button
                       className="button primary"
                       disabled={busy || !nextStatus}
@@ -205,7 +224,7 @@ export function ReportDetailPage() {
                 <p className="muted">
                   Post a response the resident will see on their report.
                 </p>
-                <form
+                  <form
                   onSubmit={(event: FormEvent) => {
                     event.preventDefault();
                     void run(
@@ -218,7 +237,7 @@ export function ReportDetailPage() {
                   }}
                   className="stack"
                 >
-                  <Field label="Message">
+                  <Field label="Message" error={actionFieldErrors.message}>
                     <textarea
                       className="textarea"
                       rows={3}
@@ -238,8 +257,8 @@ export function ReportDetailPage() {
               <div className="action">
                 <h3>Moderation</h3>
                 <p className="muted">
-                  Hide spam or abusive reports from the official workflow, or remove them
-                  entirely.
+                  Hide reports from the official workflow or remove them from resident
+                  views. Administrators can restore either action later.
                 </p>
                 <div className="button-row">
                   {report.moderationStatus !== "HIDDEN" && (
@@ -281,12 +300,15 @@ export function ReportDetailPage() {
                       className="button danger"
                       disabled={busy}
                       onClick={() => {
+                        if (!window.confirm("Remove this report from resident views? An administrator can restore it later.")) {
+                          return;
+                        }
                         void run(
                           () =>
                             api.post<Report>(`/api/reports/${report.id}/moderation`, {
                               moderationStatus: "REMOVED",
                             }),
-                          "Report removed.",
+                          "Report removed from resident views.",
                         );
                       }}
                     >

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { Field } from "../components/Field";
 import { useAuth } from "../lib/auth";
@@ -8,6 +8,8 @@ import { useAction } from "../lib/hooks";
 export function SignInPage() {
   const { user, loading, signIn } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const routeState = location.state as { from?: string; sessionExpired?: boolean } | null;
   const [form, setForm] = useState({ email: "", password: "" });
   const {
     pending: submitting,
@@ -27,7 +29,7 @@ export function SignInPage() {
     event.preventDefault();
     await run(async () => {
       await signIn(form.email, form.password);
-      navigate("/");
+      navigate(routeState?.from ?? "/");
     });
   }
 
@@ -37,6 +39,11 @@ export function SignInPage() {
       <p className="muted">
         Report a community issue or handle the ones your organization has received.
       </p>
+      {routeState?.sessionExpired && (
+        <p className="flash" role="status">
+          Your session ended. Sign in again to continue where you left off.
+        </p>
+      )}
       <form onSubmit={submit} className="stack">
         <Field label="Email" error={fieldErrors.email}>
           <input
@@ -56,7 +63,7 @@ export function SignInPage() {
             required
           />
         </Field>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <button className="button primary" type="submit" disabled={submitting}>
           {submitting ? "Signing in…" : "Sign in"}
         </button>

@@ -2,10 +2,10 @@
 // store in production. The rest of the app only knows stored names and URLs.
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
-import express, { type RequestHandler } from "express";
+import { ApiError } from "./http.js";
 
 const ALLOWED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 
@@ -13,12 +13,10 @@ export type StoredPhoto = { storedName: string };
 
 export type PhotoStore = {
   save(buffer: Buffer, originalName: string, contentType: string): Promise<StoredPhoto>;
+  /** Reads a photo after the report authorization check has passed. */
+  read(storedName: string): Promise<Buffer>;
   /** Removes a newly saved photo when report persistence rolls back. */
   remove(storedName: string): Promise<void>;
-  /** Download URL, issued only after the report's authorization check. */
-  url(storedName: string): string | Promise<string>;
-  /** Mounts /uploads for stores that serve files themselves. */
-  staticHandler?: RequestHandler;
 };
 
 /** Stored names always carry an allowed image extension, or .bin. */
@@ -31,12 +29,10 @@ export function photoExtension(originalName: string): string {
 
 export class DiskPhotoStore implements PhotoStore {
   private readonly directory: string;
-  readonly staticHandler: RequestHandler;
 
   constructor(directory: string) {
     this.directory = directory;
     mkdirSync(directory, { recursive: true });
-    this.staticHandler = express.static(directory);
   }
 
   save(buffer: Buffer, originalName: string): Promise<StoredPhoto> {
@@ -49,7 +45,15 @@ export class DiskPhotoStore implements PhotoStore {
     return rm(path.join(this.directory, storedName), { force: true });
   }
 
-  url(storedName: string): string {
-    return `/uploads/${storedName}`;
+  async read(storedName: string): Promise<Buffer> {
+    if (path.basename(storedName) !== storedName) {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+    }
+    try {
+      return await readFile(path.join(this.directory, storedName));
+    } catch {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+    }
   }
+
 }

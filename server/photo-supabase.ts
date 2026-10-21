@@ -5,8 +5,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "./http.js";
 import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store.js";
 
-const SIGNED_URL_TTL_SECONDS = 5 * 60;
-
 export class SupabasePhotoStore implements PhotoStore {
   private constructor(
     private readonly client: SupabaseClient,
@@ -43,20 +41,36 @@ export class SupabasePhotoStore implements PhotoStore {
     }
   }
 
-  async url(storedName: string): Promise<string> {
-    // Preserve already-stored Vercel Blob attachments during a storage switch.
+  async read(storedName: string): Promise<Buffer> {
     if (storedName.startsWith("https://")) {
       const url = new URL(storedName);
-      if (url.hostname.endsWith(".public.blob.vercel-storage.com") && !url.username && !url.password) {
-        return storedName;
+      if (
+        !url.hostname.endsWith(".public.blob.vercel-storage.com") ||
+        url.username ||
+        url.password
+      ) {
+        throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
       }
-      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable. Please try again.");
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) throw new Error("Legacy photo is unavailable.");
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (buffer.byteLength > 5 * 1024 * 1024) throw new Error("Legacy photo is too large.");
+        return buffer;
+      } catch {
+        throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+      }
     }
-    const { data, error } = await this.client.storage.from(this.bucket)
-      .createSignedUrl(storedName, SIGNED_URL_TTL_SECONDS);
-    if (error || !data?.signedUrl) {
-      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable. Please try again.");
+
+    const { data, error } = await this.client.storage.from(this.bucket).download(storedName);
+    if (error || !data) {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
     }
-    return data.signedUrl;
+    const buffer = Buffer.from(await data.arrayBuffer());
+    if (buffer.byteLength > 5 * 1024 * 1024) {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+    }
+    return buffer;
   }
+
 }

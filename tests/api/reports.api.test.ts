@@ -25,10 +25,10 @@ type Scenario = {
   admin: ReturnType<typeof request.agent>;
   officialAgent: ReturnType<typeof request.agent>;
   residentAgent: ReturnType<typeof request.agent>;
-  categories: Array<{ id: string; name: string }>;
+  categories: Array<{ id: string; name: string; organizationId: string }>;
 };
 
-/** Admin + verified Public Works official + active resident, with default categories. */
+/** Admin + verified Public Works official + active resident, with test routing configured. */
 async function scenario(): Promise<Scenario> {
   const { app, uploadDirectory } = await testApplicationWithUploads();
   const admin = await setupAdministrator(app);
@@ -95,7 +95,7 @@ function reportFields(categoryId: string, title: string, description: string, lo
 }
 
 describe("photo attachments", () => {
-  it("stores an uploaded photo on the report and serves it from /uploads", async () => {
+  it("serves uploaded photos only through the authorized report endpoint", async () => {
     const { app, residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
     const png = Buffer.from(PNG_BASE64, "base64");
@@ -114,7 +114,7 @@ describe("photo attachments", () => {
     expect(attachment).toMatchObject({
       filename: "curb-ramp.png",
       contentType: "image/png",
-      url: expect.stringMatching(/^\/uploads\/.+\.png$/),
+      url: `/api/reports/${created.body.id}/attachments/${attachment.id}`,
     });
     // Files are stored under a generated name, never the client's filename.
     expect(attachment.url.endsWith("/curb-ramp.png")).toBe(false);
@@ -125,11 +125,47 @@ describe("photo attachments", () => {
       .expect(200);
     expect(detail.body.attachments).toEqual([attachment]);
 
-    // The stored file is served byte-for-byte from /uploads.
-    const served = await request(app).get(attachment.url).expect(200);
+    await request(app).get(attachment.url).expect(401);
+    const otherResident = request.agent(app);
+    await otherResident.post("/api/auth/register").send({
+      displayName: "Another Resident",
+      email: "another-resident@example.test",
+      password: "another resident account password",
+    }).expect(201);
+    await otherResident.get(attachment.url).expect(404);
+
+    // Authorized readers get the file through the same report visibility policy.
+    const served = await residentAgent.get(attachment.url).expect(200);
     expect(served.headers["content-type"]).toContain("image/png");
     expect(Buffer.isBuffer(served.body)).toBe(true);
     expect(Buffer.compare(served.body, png)).toBe(0);
+  });
+
+  it("limits submissions to residents and refuses categories whose organization is inactive", async () => {
+    const { admin, app, officialAgent, residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+
+    await officialAgent.post("/api/reports").send({
+      categoryId: roads.id,
+      title: "Official account report",
+      description: "An official should not submit resident reports.",
+      location: "Main Street",
+    }).expect(403);
+
+    await admin.post(`/api/admin/organizations/${roads.organizationId}/active`)
+      .send({ active: false }).expect(200);
+    const availableCategories = await residentAgent.get("/api/categories").expect(200);
+    expect(availableCategories.body.categories.some((item: { id: string }) => item.id === roads.id)).toBe(false);
+
+    const rejected = await residentAgent.post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Pothole on a local road")
+      .field("description", "The road surface is broken and needs an inspection.")
+      .field("location", "Main Street")
+      .expect(422);
+    expect(rejected.body.error.fieldErrors.categoryId).toContain(
+      "Choose a category routed to an active organization.",
+    );
   });
 
   it("rejects a non-image attachment with a clean 415 and persists nothing", async () => {

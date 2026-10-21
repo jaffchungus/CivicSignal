@@ -19,12 +19,21 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
+async function parseResponse<T>(response: Response, path: string): Promise<T> {
   const body = (
     response.status === 204 ? null : await response.json().catch(() => null)
   ) as (T & Partial<ApiErrorBody>) | null;
 
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      typeof window !== "undefined" &&
+      !["/api/auth/login", "/api/auth/register", "/api/auth/session", "/api/setup/status"].includes(
+        path.split("?")[0],
+      )
+    ) {
+      window.dispatchEvent(new Event("civicsignal:session-expired"));
+    }
     const error = body?.error;
     const fieldErrors: Record<string, string> = {};
     for (const [field, messages] of Object.entries(error?.fieldErrors ?? {})) {
@@ -43,7 +52,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 function request<T>(path: string, init?: RequestInit): Promise<T> {
   return fetch(path, { credentials: "same-origin", ...init }).then((response) =>
-    parseResponse<T>(response),
+    parseResponse<T>(response, path),
   );
 }
 

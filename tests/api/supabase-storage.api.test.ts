@@ -2,6 +2,7 @@
 
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Express } from "express";
 
 import { createApp } from "../../server/app";
 import { createSqliteDatabase } from "../../server/database-sqlite";
@@ -19,21 +20,26 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function storageHttp(options: { publicBucket?: boolean; failure?: "bucket" | "upload" | "sign" } = {}) {
+function storageHttp(options: { publicBucket?: boolean; failure?: "bucket" | "upload" | "download" } = {}) {
   const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     if ((options.failure === "bucket" && url.includes("/bucket/")) ||
-        (options.failure === "upload" && method === "POST" && !url.includes("/sign/")) ||
-        (options.failure === "sign" && url.includes("/sign/"))) {
+        (options.failure === "upload" && method === "POST")) {
       return Response.json({ message: "Storage unavailable", statusCode: "503" }, { status: 503 });
     }
     if (method === "DELETE") return Response.json([]);
     if (url.includes("/bucket/")) {
       return Response.json({ id: "civicsignal-photos", name: "civicsignal-photos", public: options.publicBucket ?? false });
     }
-    if (url.includes("/sign/")) {
-      return Response.json({ signedURL: "/object/sign/civicsignal-photos/photos/test.png?token=test" });
+    if (method === "GET" && url.includes("/object/civicsignal-photos/photos/")) {
+      if (options.failure === "download") {
+        return Response.json({ message: "Storage unavailable" }, { status: 503 });
+      }
+      return new Response(PNG, { headers: { "content-type": "image/png" } });
+    }
+    if (method === "GET" && url.includes(".public.blob.vercel-storage.com/")) {
+      return new Response(PNG, { headers: { "content-type": "image/png" } });
     }
     return Response.json({ Key: "civicsignal-photos/photos/test.png" });
   });
@@ -74,6 +80,16 @@ async function submitPhoto(agent: ReturnType<typeof request.agent>, categoryId: 
     .attach("photo", PNG, { filename: "../../curb.png", contentType: "image/png" });
 }
 
+async function registerResident(app: Express) {
+  const resident = request.agent(app);
+  await resident.post("/api/auth/register").send({
+    displayName: "Report Owner",
+    email: "owner@example.test",
+    password: "a resident account password",
+  }).expect(201);
+  return resident;
+}
+
 describe("Supabase private photos", () => {
   it("rejects unavailable and public buckets instead of weakening authorization", async () => {
     storageHttp({ failure: "bucket" });
@@ -84,25 +100,25 @@ describe("Supabase private photos", () => {
       .rejects.toThrow("must be private");
   });
 
-  it("uploads using a server key and signs photos only for authorized report viewers", async () => {
+  it("serves private photos only through the authorized report endpoint", async () => {
     const fetch = storageHttp();
     const app = await application();
-    const owner = await setupAdministrator(app);
+    await setupAdministrator(app);
+    const owner = await registerResident(app);
     const { body: { categories } } = await owner.get("/api/categories").expect(200);
     const created = await submitPhoto(owner, categories[0].id);
     expect(created.status).toBe(201);
     expect(created.body.attachments[0].url).toBe(
-      `${SUPABASE_URL}/storage/v1/object/sign/civicsignal-photos/photos/test.png?token=test`,
+      `/api/reports/${created.body.id}/attachments/${created.body.attachments[0].id}`,
     );
     const upload = fetch.mock.calls.find(([url, init]) =>
       String(url).includes("/object/civicsignal-photos/") && init?.method === "POST");
     expect(String(upload?.[0])).toMatch(/\/photos\/[\w-]+\.png$/);
     expect(new Headers(upload?.[1]?.headers).get("apikey")).toBe("sb_secret_test_only");
-    const signed = fetch.mock.calls.find(([url]) => String(url).includes("/sign/"));
-    expect(JSON.parse(String(signed?.[1]?.body))).toMatchObject({ expiresIn: 300 });
 
     fetch.mockClear();
     await request(app).get(`/api/reports/${created.body.id}`).expect(401);
+    await request(app).get(created.body.attachments[0].url).expect(401);
     const stranger = request.agent(app);
     await stranger.post("/api/auth/register").send({
       displayName: "Another Resident", email: "another@example.test", password: "another resident password",
@@ -111,21 +127,17 @@ describe("Supabase private photos", () => {
     expect(fetch).not.toHaveBeenCalled();
 
     await owner.get(`/api/reports/${created.body.id}`).expect(200);
-    expect(fetch.mock.calls.some(([url]) => String(url).includes("/sign/"))).toBe(true);
+    const served = await owner.get(created.body.attachments[0].url).expect(200);
+    expect(Buffer.compare(served.body, PNG)).toBe(0);
+    expect(fetch.mock.calls.some(([url]) => String(url).includes("/object/civicsignal-photos/photos/"))).toBe(true);
   }, 15_000);
 
-  it.each([
-    { phase: "creation", failOnCreate: true },
-    { phase: "detail viewing", failOnCreate: false },
-  ])("keeps a single report usable when signing fails during $phase", async ({ failOnCreate }) => {
-    const options: { failure?: "sign" } = { failure: failOnCreate ? "sign" : undefined };
+  it("keeps a saved report usable when private photo retrieval fails", async () => {
+    const options: { failure?: "download" } = {};
     const fetch = storageHttp(options);
     const app = await application();
     await setupAdministrator(app);
-    const owner = request.agent(app);
-    await owner.post("/api/auth/register").send({
-      displayName: "Report Owner", email: "owner@example.test", password: "a resident account password",
-    }).expect(201);
+    const owner = await registerResident(app);
     const { body: { categories } } = await owner.get("/api/categories").expect(200);
 
     const created = await submitPhoto(owner, categories[0].id);
@@ -133,7 +145,7 @@ describe("Supabase private photos", () => {
     expect(created.body).toMatchObject({
       id: expect.any(String), title: "Damaged curb at the library", status: "SUBMITTED",
     });
-    expect(created.body.attachments).toHaveLength(failOnCreate ? 0 : 1);
+    expect(created.body.attachments).toHaveLength(1);
     const attachmentId = created.body.attachments[0]?.id;
     const uploadCalls = () => fetch.mock.calls.filter(([url, init]) =>
       String(url).includes("/object/civicsignal-photos/") && init?.method === "POST");
@@ -141,7 +153,7 @@ describe("Supabase private photos", () => {
     const storedName = uploadUrl.split("/object/civicsignal-photos/")[1];
     expect(storedName).toMatch(/^photos\/[\w-]+\.png$/);
 
-    options.failure = "sign";
+    options.failure = "download";
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const detail = await owner.get(`/api/reports/${created.body.id}`).expect(200);
       expect(detail.body).toMatchObject({
@@ -149,20 +161,22 @@ describe("Supabase private photos", () => {
         title: created.body.title, description: created.body.description, status: "SUBMITTED",
         category: created.body.category, organization: created.body.organization,
         reporter: created.body.reporter, capabilities: created.body.capabilities,
-        updates: [], attachments: [],
+        updates: [], attachments: created.body.attachments,
       });
       expect(detail.body.timeline).toHaveLength(1);
       expect(detail.body.timeline[0].action).toBe("REPORT_CREATED");
       const serialized = JSON.stringify(detail.body);
       for (const privateValue of [storedName, "stored_name", "storedName", "civicsignal-photos", "sb_secret_test_only"]) {
         expect(serialized).not.toContain(privateValue);
-        if (failOnCreate) expect(JSON.stringify(created.body)).not.toContain(privateValue);
+        expect(JSON.stringify(created.body)).not.toContain(privateValue);
       }
+      const unavailable = await owner.get(created.body.attachments[0].url).expect(503);
+      expect(unavailable.body.error.code).toBe("PHOTO_UNAVAILABLE");
     }
 
-    const signingCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes("/sign/"));
-    const signingCount = signingCalls().length;
     await request(app).get(`/api/reports/${created.body.id}`).expect(401);
+    const photoUrl = created.body.attachments[0].url;
+    await request(app).get(photoUrl).expect(401);
     const stranger = request.agent(app);
     await stranger.post("/api/auth/register").send({
       displayName: "Another Resident", email: "another@example.test", password: "another resident password",
@@ -170,13 +184,13 @@ describe("Supabase private photos", () => {
     const denied = await stranger.get(`/api/reports/${created.body.id}`).expect(404);
     expect(denied.body.error.code).toBe("REPORT_NOT_FOUND");
     expect(denied.body).not.toHaveProperty("attachments");
-    expect(signingCalls()).toHaveLength(signingCount);
+    await stranger.get(photoUrl).expect(404);
 
     options.failure = undefined;
     const recovered = await owner.get(`/api/reports/${created.body.id}`).expect(200);
     expect(recovered.body.attachments).toHaveLength(1);
     expect(recovered.body.attachments[0]).toMatchObject({
-      id: expect.any(String), contentType: "image/png", url: expect.stringContaining("/object/sign/"),
+      id: expect.any(String), contentType: "image/png", url: photoUrl,
     });
     if (attachmentId) expect(recovered.body.attachments[0].id).toBe(attachmentId);
     expect(recovered.body.attachments[0]).not.toHaveProperty("stored_name");
@@ -191,7 +205,8 @@ describe("Supabase private photos", () => {
   it("returns the existing API error shape and persists no report when upload fails", async () => {
     storageHttp({ failure: "upload" });
     const app = await application();
-    const owner = await setupAdministrator(app);
+    await setupAdministrator(app);
+    const owner = await registerResident(app);
     const { body: { categories } } = await owner.get("/api/categories").expect(200);
     const rejected = await submitPhoto(owner, categories[0].id);
     expect(rejected.status).toBe(503);
@@ -202,7 +217,8 @@ describe("Supabase private photos", () => {
   it("deletes only the new Supabase photo when report persistence rolls back", async () => {
     const fetch = storageHttp();
     const app = await application(true);
-    const owner = await setupAdministrator(app);
+    await setupAdministrator(app);
+    const owner = await registerResident(app);
     const { body: { categories } } = await owner.get("/api/categories").expect(200);
     const rejected = await submitPhoto(owner, categories[0].id);
     expect(rejected.status).toBe(503);
@@ -218,12 +234,12 @@ describe("Supabase private photos", () => {
     expect(JSON.stringify(rejected.body)).not.toContain(storedName);
   });
 
-  it("handles signing failures and keeps existing Vercel Blob attachments readable", async () => {
-    storageHttp({ failure: "sign" });
+  it("reads legacy blob photos only from the configured Vercel host", async () => {
+    storageHttp();
     const photos = await SupabasePhotoStore.create(client(), "civicsignal-photos");
-    await expect(photos.url("photos/test.png")).rejects.toMatchObject({ status: 503, code: "PHOTO_UNAVAILABLE" });
     const legacy = "https://example.public.blob.vercel-storage.com/photos/legacy.png";
-    await expect(photos.url(legacy)).resolves.toBe(legacy);
-    await expect(photos.url("https://untrusted.example/photo.png")).rejects.toMatchObject({ code: "PHOTO_UNAVAILABLE" });
+    await expect(photos.read(legacy)).resolves.toEqual(PNG);
+    await expect(photos.read("https://untrusted.example/photo.png"))
+      .rejects.toMatchObject({ code: "PHOTO_UNAVAILABLE" });
   });
 });

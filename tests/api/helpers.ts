@@ -55,9 +55,37 @@ export const ADMIN_CREDENTIALS = {
 /** Runs first-run setup and returns a signed-in administrator agent. */
 export function setupAdministrator(app: Express) {
   const agent = request.agent(app);
-  return agent
-    .post("/api/setup")
-    .send(ADMIN_CREDENTIALS)
-    .expect(201)
-    .then(() => agent);
+  return (async () => {
+    await agent.post("/api/setup").send(ADMIN_CREDENTIALS).expect(201);
+
+    // Civic routing belongs to each deployment. Tests provision their own
+    // deterministic municipality configuration through the admin API.
+    const organizations = new Map<string, string>();
+    for (const organization of [
+      { key: "publicWorks", name: "Public Works", kind: "PUBLIC_SERVICE" },
+      { key: "parks", name: "Parks and Recreation", kind: "PUBLIC_SERVICE" },
+      { key: "police", name: "Police Department", kind: "LAW_ENFORCEMENT" },
+    ]) {
+      const result = await agent.post("/api/admin/organizations").send({
+        name: organization.name,
+        kind: organization.kind,
+      }).expect(201);
+      organizations.set(organization.key, result.body.organization.id);
+    }
+
+    for (const [name, description, organizationKey] of [
+      ["Roads and Sidewalks", "Potholes, damaged sidewalks, and road hazards", "publicWorks"],
+      ["Streetlights", "Broken or malfunctioning public streetlights", "publicWorks"],
+      ["Trash and Sanitation", "Missed collection, dumping, and public waste", "publicWorks"],
+      ["Parks and Recreation", "Maintenance issues in parks and public recreation areas", "parks"],
+      ["Non-Emergency Public Safety", "Non-emergency concerns appropriate for local police", "police"],
+    ] as const) {
+      await agent.post("/api/admin/categories").send({
+        name,
+        description,
+        organizationId: organizations.get(organizationKey),
+      }).expect(201);
+    }
+    return agent;
+  })();
 }

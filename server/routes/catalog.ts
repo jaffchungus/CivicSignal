@@ -25,7 +25,7 @@ export function createCatalogRouter(deps: { database: CivicDatabase }): Router {
                 organizations.name AS "organizationName"
          FROM categories
          JOIN organizations ON organizations.id = categories.organization_id
-         WHERE categories.active = 1
+         WHERE categories.active = 1 AND organizations.active = 1
          ORDER BY categories.name`,
       )
       .all();

@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { ReportTable } from "../components/ReportTable";
 import { useAuth } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
+import { Field } from "../components/Field";
 import type {
   AdminOverview,
   Category,
@@ -19,7 +20,7 @@ function ResidentHome() {
     <section>
       <div className="page-header">
         <div>
-          <h1>My reports</h1>
+          <h1>Your reports</h1>
           <p className="muted">
             Track the community issues you have submitted and any responses from local
             public-service organizations.
@@ -29,7 +30,12 @@ function ResidentHome() {
           Report an issue
         </Link>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <div className="error" role="alert">
+          <span>{error}</span>
+          <button className="button" type="button" onClick={list.reload}>Try again</button>
+        </div>
+      )}
       {loading ? (
         <p className="centered">Loading…</p>
       ) : reports.length === 0 ? (
@@ -88,42 +94,54 @@ function StaffHome() {
           setQuery(search.trim());
         }}
       >
-        <select
-          className="select"
-          value={status}
-          onChange={(event) => setStatus(event.target.value)}
-        >
-          <option value="">All statuses</option>
-          <option value="SUBMITTED">Submitted</option>
-          <option value="UNDER_REVIEW">Under review</option>
-          <option value="IN_PROGRESS">In progress</option>
-          <option value="RESOLVED">Resolved</option>
-          <option value="CLOSED">Closed</option>
-        </select>
-        <select
-          className="select"
-          value={categoryId}
-          onChange={(event) => setCategoryId(event.target.value)}
-        >
-          <option value="">All categories</option>
-          {categories.map((category) => (
-            <option key={category.id} value={category.id}>
-              {category.name}
-            </option>
-          ))}
-        </select>
-        <input
-          className="input"
-          placeholder="Search title, description, or reference…"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+        <Field label="Status" className="filter-field">
+          <select
+            className="select"
+            value={status}
+            onChange={(event) => setStatus(event.target.value)}
+          >
+            <option value="">All statuses</option>
+            <option value="SUBMITTED">Submitted</option>
+            <option value="UNDER_REVIEW">Under review</option>
+            <option value="IN_PROGRESS">In progress</option>
+            <option value="RESOLVED">Resolved</option>
+            <option value="CLOSED">Closed</option>
+          </select>
+        </Field>
+        <Field label="Category" className="filter-field">
+          <select
+            className="select"
+            value={categoryId}
+            onChange={(event) => setCategoryId(event.target.value)}
+          >
+            <option value="">All categories</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Search reports" className="filter-field search-field">
+          <input
+            className="input"
+            placeholder="Title, description, or reference"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </Field>
         <button className="button" type="submit">
           Search
         </button>
       </form>
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <div className="error" role="alert">
+          <span>{error}</span>
+          <button className="button" type="button" onClick={list.reload}>Try again</button>
+        </div>
+      )}
+      {categoryList.error && <p className="muted">Category filters could not be loaded.</p>}
       {loading ? (
         <p className="centered">Loading…</p>
       ) : reports.length === 0 ? (
@@ -184,11 +202,30 @@ function AdminHome() {
           </div>
         ))}
       </div>
+      {(overviewFetch.error || list.error) && (
+        <div className="error" role="alert">
+          <span>{overviewFetch.error ?? list.error}</span>
+          <button className="button" type="button" onClick={() => { overviewFetch.reload(); list.reload(); }}>
+            Try again
+          </button>
+        </div>
+      )}
       <h2>All reports</h2>
       {loading ? (
         <p className="centered">Loading…</p>
+      ) : reports.length === 0 ? (
+        <div className="card empty">
+          <h3>No reports have been submitted</h3>
+          <p className="muted">Reports appear here after residents submit them through a configured category.</p>
+          <Link className="button" to="/admin">Review local setup</Link>
+        </div>
       ) : (
-        <ReportTable reports={reports.slice(0, 8)} />
+        <>
+          <ReportTable reports={reports.slice(0, 8)} />
+          {reports.length > 8 && (
+            <p className="muted">Showing the 8 most recent reports. Use Administration to review all reports.</p>
+          )}
+        </>
       )}
     </section>
   );

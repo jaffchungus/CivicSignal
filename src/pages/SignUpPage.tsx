@@ -11,7 +11,12 @@ type RequestRole = "RESIDENT" | "OFFICIAL" | "LAW_ENFORCEMENT";
 export function SignUpPage() {
   const { user, loading, signUp } = useAuth();
   const navigate = useNavigate();
-  const { data: organizationData } = useFetch<{
+  const {
+    data: organizationData,
+    loading: organizationsLoading,
+    error: organizationsError,
+    reload: reloadOrganizations,
+  } = useFetch<{
     organizations: Organization[];
   }>("/api/organizations");
   const organizations = organizationData?.organizations ?? [];
@@ -47,6 +52,9 @@ export function SignUpPage() {
   const organizationOptions = organizations.filter(
     (organization) => organization.kind === expectedKind,
   );
+  const needsOrganization = form.role !== "RESIDENT";
+  const organizationConfigurationMissing =
+    needsOrganization && !organizationsLoading && !organizationsError && organizationOptions.length === 0;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -126,27 +134,52 @@ export function SignUpPage() {
             <option value="LAW_ENFORCEMENT">Law enforcement</option>
           </select>
         </Field>
-        {form.role !== "RESIDENT" && (
-          <Field label="Organization" error={fieldErrors.organizationId}>
+        {needsOrganization && (
+          <>
+            <Field
+              label="Organization"
+              hint="Official access remains pending until an administrator verifies your account."
+              error={fieldErrors.organizationId}
+            >
             <select
               className="select"
               value={form.organizationId}
+              disabled={organizationsLoading || Boolean(organizationsError) || organizationOptions.length === 0}
               onChange={(event) =>
                 setForm({ ...form, organizationId: event.target.value })
               }
               required
             >
-              <option value="">Select your organization…</option>
+              <option value="">
+                {organizationsLoading ? "Loading organizations…" : "Select your organization…"}
+              </option>
               {organizationOptions.map((organization) => (
                 <option key={organization.id} value={organization.id}>
                   {organization.name}
                 </option>
               ))}
             </select>
-          </Field>
+            </Field>
+            {organizationsError && (
+              <div className="error" role="alert">
+                <span>{organizationsError}</span>
+                <button className="button" type="button" onClick={reloadOrganizations}>Try again</button>
+              </div>
+            )}
+            {organizationConfigurationMissing && (
+              <p className="warning" role="status">
+                No {form.role === "LAW_ENFORCEMENT" ? "law-enforcement" : "public-service"} organizations are configured.
+                Ask your CivicSignal administrator to add yours before requesting official access.
+              </p>
+            )}
+          </>
         )}
-        {error && <p className="error">{error}</p>}
-        <button className="button primary" type="submit" disabled={submitting}>
+        {error && <p className="error" role="alert">{error}</p>}
+        <button
+          className="button primary"
+          type="submit"
+          disabled={submitting || (needsOrganization && (organizationsLoading || Boolean(organizationsError) || organizationOptions.length === 0))}
+        >
           {submitting ? "Creating account…" : "Create account"}
         </button>
       </form>

@@ -3,22 +3,24 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { useNotifications } from "../lib/notifications";
+import { useAction } from "../lib/hooks";
 import type { Notification } from "../../shared/contracts";
 
 export function NotificationsPage() {
   const navigate = useNavigate();
   const { notifications, unreadCount, loading, error, reload } = useNotifications();
+  const action = useAction();
 
   function openNotification(notification: Notification) {
-    if (!notification.read) {
-      void api
-        .post(`/api/notifications/${notification.id}/read`)
-        .then(reload)
-        .catch(() => undefined);
+    if (notification.read) {
+      if (notification.reportId) navigate(`/reports/${notification.reportId}`);
+      return;
     }
-    if (notification.reportId) {
-      navigate(`/reports/${notification.reportId}`);
-    }
+    void action.run(async () => {
+      await api.post(`/api/notifications/${notification.id}/read`);
+      reload();
+      if (notification.reportId) navigate(`/reports/${notification.reportId}`);
+    }, "Notification marked as read.");
   }
 
   return (
@@ -33,16 +35,21 @@ export function NotificationsPage() {
         {unreadCount > 0 && (
           <button
             className="button"
+            disabled={action.pending}
             onClick={() => {
-              void api.post("/api/notifications/read-all").then(reload);
+              void action.run(async () => {
+                await api.post("/api/notifications/read-all");
+                reload();
+              }, "All notifications marked as read.");
             }}
           >
-            Mark all as read
+            {action.pending ? "Saving…" : "Mark all as read"}
           </button>
         )}
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {action.notice && <p className="flash" role="status">{action.notice}</p>}
+      {(action.error ?? error) && <p className="error" role="alert">{action.error ?? error}</p>}
       {loading ? (
         <p className="centered">Loading…</p>
       ) : notifications.length === 0 ? (
@@ -60,13 +67,14 @@ export function NotificationsPage() {
               <button
                 type="button"
                 className={`notification-row${notification.read ? "" : " unread"}`}
+                disabled={action.pending}
                 onClick={() => openNotification(notification)}
               >
-                <div>
-                  <strong>{notification.title}</strong>
-                  <p className="muted">{notification.message}</p>
-                  <p className="muted">{formatDateTime(notification.createdAt)}</p>
-                </div>
+                <span className="notification-copy">
+                  <span className="notification-title">{notification.title}</span>
+                  <span className="muted">{notification.message}</span>
+                  <span className="muted">{formatDateTime(notification.createdAt)}</span>
+                </span>
                 {!notification.read && <span className="pill">New</span>}
               </button>
             </li>

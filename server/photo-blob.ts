@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { del, put } from "@vercel/blob";
 
+import { ApiError } from "./http.js";
 import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store.js";
 
 export class BlobPhotoStore implements PhotoStore {
@@ -18,7 +19,38 @@ export class BlobPhotoStore implements PhotoStore {
     return del(storedName);
   }
 
-  url(storedName: string): string {
-    return storedName;
+  async read(storedName: string): Promise<Buffer> {
+    let url: URL;
+    try {
+      url = new URL(storedName);
+    } catch {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+    }
+    if (
+      url.protocol !== "https:" ||
+      !url.hostname.endsWith(".public.blob.vercel-storage.com") ||
+      url.username ||
+      url.password
+    ) {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+    }
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) {
+        throw new Error("Blob storage returned an unavailable photo.");
+      }
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > 5 * 1024 * 1024) {
+        throw new Error("Stored photo exceeds the upload limit.");
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.byteLength > 5 * 1024 * 1024) {
+        throw new Error("Stored photo exceeds the upload limit.");
+      }
+      return buffer;
+    } catch {
+      throw new ApiError(503, "PHOTO_UNAVAILABLE", "This photo is unavailable.");
+    }
   }
+
 }

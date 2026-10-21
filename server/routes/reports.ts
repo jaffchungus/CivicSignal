@@ -188,19 +188,17 @@ function serializeSummary(row: ReportRow) {
 
 async function serializeDetail(
   database: CivicDatabase,
-  photos: PhotoStore,
   row: ReportRow,
   user: { id: string; role: UserRole; organizationId: string | null },
 ) {
   const attachments = (await database
     .prepare(
-      `SELECT id, filename, stored_name, content_type
+      `SELECT id, filename, content_type
        FROM attachments WHERE report_id = ? ORDER BY created_at`,
     )
     .all(row.id)) as Array<{
     id: string;
     filename: string;
-    stored_name: string;
     content_type: string;
   }>;
 
@@ -246,27 +244,17 @@ async function serializeDetail(
     actor_role: UserRole | null;
   }>;
 
-  const availableAttachments = await Promise.all(attachments.map(async (attachment) => {
-    try {
-      return {
-        id: attachment.id,
-        filename: attachment.filename,
-        url: await photos.url(attachment.stored_name),
-        contentType: attachment.content_type,
-      };
-    } catch {
-      // Optional photo delivery must not fail a saved report. Keep the stored
-      // attachment for a later read; never fall back to its private storage name.
-      return null;
-    }
-  }));
-
   const staffScope =
     isStaffRole(user.role) && row.organization_id === user.organizationId;
 
   return {
     ...serializeSummary(row),
-    attachments: availableAttachments.filter((attachment) => attachment !== null),
+    attachments: attachments.map((attachment) => ({
+      id: attachment.id,
+      filename: attachment.filename,
+      url: `/api/reports/${row.id}/attachments/${attachment.id}`,
+      contentType: attachment.content_type,
+    })),
     updates: updates.map((update) => ({
       id: update.id,
       message: update.message,
@@ -435,6 +423,7 @@ export function createReportsRouter(deps: {
   router.post(
     "/",
     authenticate(database),
+    requireRole("RESIDENT"),
     upload.single("photo"),
     async (request, response) => {
       const user = currentUser(request);
@@ -442,8 +431,10 @@ export function createReportsRouter(deps: {
 
       const category = (await database
         .prepare(
-          `SELECT id, name, organization_id FROM categories
-           WHERE id = ? AND active = 1`,
+          `SELECT categories.id, categories.name, categories.organization_id
+           FROM categories
+           JOIN organizations ON organizations.id = categories.organization_id
+           WHERE categories.id = ? AND categories.active = 1 AND organizations.active = 1`,
         )
         .get(input.categoryId)) as
         | { id: string; name: string; organization_id: string }
@@ -453,7 +444,7 @@ export function createReportsRouter(deps: {
           422,
           "VALIDATION_ERROR",
           "The request contains invalid fields.",
-          { categoryId: ["Select an active issue category."] },
+          { categoryId: ["Choose a category routed to an active organization."] },
         );
       }
 
@@ -532,7 +523,7 @@ export function createReportsRouter(deps: {
       });
 
       const row = await loadReport(database, reportId);
-      response.status(201).json(await serializeDetail(database, photos, row, user));
+      response.status(201).json(await serializeDetail(database, row, user));
     },
   );
 
@@ -540,8 +531,40 @@ export function createReportsRouter(deps: {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     assertCanView(row, user);
-    response.json(await serializeDetail(database, photos, row, user));
+    response.json(await serializeDetail(database, row, user));
   });
+
+  router.get(
+    "/:reportId/attachments/:attachmentId",
+    authenticate(database),
+    async (request, response) => {
+      const user = currentUser(request);
+      const reportId = pathId(request, "reportId");
+      const attachmentId = pathId(request, "attachmentId");
+      const report = await loadReport(database, reportId);
+      assertCanView(report, user);
+      const attachment = (await database
+        .prepare(
+          `SELECT stored_name, content_type FROM attachments
+           WHERE id = ? AND report_id = ?`,
+        )
+        .get(attachmentId, reportId)) as
+        | { stored_name: string; content_type: string }
+        | undefined;
+      if (!attachment) {
+        throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "This report attachment does not exist.");
+      }
+      const photo = await photos.read(attachment.stored_name);
+      response
+        .status(200)
+        .set("Content-Type", attachment.content_type)
+        .set("Content-Length", String(photo.byteLength))
+        .set("Content-Disposition", "inline")
+        .set("Cache-Control", "private, no-store")
+        .set("X-Content-Type-Options", "nosniff")
+        .send(photo);
+    },
+  );
 
   router.post(
     "/:reportId/claim",
@@ -554,7 +577,7 @@ export function createReportsRouter(deps: {
       assertCanManage(row, user);
 
       if (row.assigned_user_id === user.id) {
-        response.json(await serializeDetail(database, photos, row, user));
+        response.json(await serializeDetail(database, row, user));
         return;
       }
       if (row.assigned_user_id) {
@@ -589,7 +612,7 @@ export function createReportsRouter(deps: {
       });
 
       response.json(
-        await serializeDetail(database, photos, await loadReport(database, row.id), user),
+        await serializeDetail(database, await loadReport(database, row.id), user),
       );
     },
   );
@@ -644,7 +667,7 @@ export function createReportsRouter(deps: {
       });
 
       response.json(
-        await serializeDetail(database, photos, await loadReport(database, row.id), user),
+        await serializeDetail(database, await loadReport(database, row.id), user),
       );
     },
   );
@@ -692,7 +715,7 @@ export function createReportsRouter(deps: {
 
       response
         .status(201)
-        .json(await serializeDetail(database, photos, await loadReport(database, row.id), user));
+        .json(await serializeDetail(database, await loadReport(database, row.id), user));
     },
   );
 
@@ -726,7 +749,7 @@ export function createReportsRouter(deps: {
       });
 
       response.json(
-        await serializeDetail(database, photos, await loadReport(database, row.id), user),
+        await serializeDetail(database, await loadReport(database, row.id), user),
       );
     },
   );

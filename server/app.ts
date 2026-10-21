@@ -26,21 +26,6 @@ type AppOptions = {
   sessionTtlDays?: number;
 };
 
-function safeErrorDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("CONNECTION_STRING or DB_PASSWORD is required")) {
-    return "MISSING_DATABASE_CONFIG";
-  }
-  if (message.includes("must be a Postgres connection string")) {
-    return "INVALID_DATABASE_URL";
-  }
-  const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && /^[a-z0-9_]{2,40}$/i.test(code)) {
-    return code.toUpperCase();
-  }
-  return "API_REQUEST_FAILED";
-}
-
 export function createApp(options: AppOptions) {
   const { database, photos } = options;
   const secureCookies = options.secureCookies ?? process.env.NODE_ENV === "production";
@@ -54,7 +39,6 @@ export function createApp(options: AppOptions) {
   if (process.env.VERCEL) {
     app.set("trust proxy", 1);
   }
-  // Photo attachments may be served from an external blob store in production.
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -86,10 +70,6 @@ export function createApp(options: AppOptions) {
   );
   app.use("/api/notifications", createNotificationsRouter({ database }));
   app.use("/api/admin", createAdminRouter({ database }));
-  if (photos.staticHandler) {
-    app.use("/uploads", photos.staticHandler);
-  }
-
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
     if (error instanceof ApiError) {
       response.status(error.status).json({
@@ -117,11 +97,7 @@ export function createApp(options: AppOptions) {
     }
     console.error(error);
     response.status(500).json({
-      error: {
-        code: "INTERNAL_ERROR",
-        message: "An unexpected error occurred.",
-        diagnostic: safeErrorDiagnostic(error),
-      },
+      error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred." },
     });
   });
 

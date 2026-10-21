@@ -131,9 +131,10 @@ class UnavailablePhotoStore implements PhotoStore {
     throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
   }
 
-  async url(_storedName: string): Promise<string> {
+  async read(_storedName: string): Promise<Buffer> {
     throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
   }
+
 }
 
 export async function createProductionApp() {

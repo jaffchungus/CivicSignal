@@ -5,10 +5,12 @@ import { Field } from "../components/Field";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useAction } from "../lib/hooks";
+import type { PublicUser } from "../../shared/contracts";
 
 export function SetupPage() {
-  const { user, setupRequired, loading, refresh } = useAuth();
+  const { user, setupRequired, loading, completeSetup } = useAuth();
   const navigate = useNavigate();
+  const [completing, setCompleting] = useState(false);
   const [form, setForm] = useState({
     municipalityName: "",
     displayName: "",
@@ -25,18 +27,19 @@ export function SetupPage() {
   if (loading) {
     return <p className="centered">Loading…</p>;
   }
-  if (!setupRequired) {
+  if (!setupRequired && !completing) {
     return <Navigate to={user ? "/" : "/signin"} replace />;
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setCompleting(true);
     await run(async () => {
-      await api.post("/api/setup", form);
-      await refresh();
+      const result = await api.post<{ user: PublicUser }>("/api/setup", form);
+      completeSetup(result.user);
       navigate("/", {
         state: {
-          flash: `CivicSignal is ready for ${form.municipalityName}. Verify official accounts from the Administration page.`,
+          flash: `CivicSignal is ready for ${form.municipalityName}. Add your local organizations and issue categories in Administration before residents submit reports.`,
         },
       });
     });
@@ -90,7 +93,7 @@ export function SetupPage() {
             required
           />
         </Field>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <button className="button primary" type="submit" disabled={submitting}>
           {submitting ? "Setting up…" : "Create administrator"}
         </button>

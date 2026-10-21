@@ -13,8 +13,9 @@ export function ReportTable({ reports }: { reports: Report[] }) {
             <div className="report-row-main">
               <span className="reference">{report.referenceCode}</span>
               <strong>{report.title}</strong>
-              <span className="muted">
-                {report.category.name} · {report.organization?.name}
+              <span className="muted report-context">
+                <span>{report.location}</span>
+                <span>{report.category.name} · {report.organization?.name ?? "Organization unavailable"}</span>
               </span>
             </div>
             <div className="report-row-meta">

@@ -70,30 +70,6 @@ function dispatch(app: App, request: Request, response: Response): Promise<void>
   });
 }
 
-function safeStartupDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("CONNECTION_STRING or DB_PASSWORD is required")) {
-    return "MISSING_DATABASE_CONFIG";
-  }
-  if (message.includes("must be a Postgres connection string")) {
-    return "INVALID_DATABASE_URL";
-  }
-
-  const code = (error as { code?: unknown } | null)?.code;
-  if (code === "ERR_MODULE_NOT_FOUND") {
-    const missingPackage = message.match(/Cannot find package ['"]([^'"]+)['"]/i)?.[1];
-    if (missingPackage) return `MISSING_PACKAGE:${missingPackage}`;
-    const missingModule = message.match(/Cannot find module ['"]([^'"]+)['"]/i)?.[1];
-    if (missingModule) {
-      return `MISSING_MODULE:${missingModule.split(/[\\/]/).at(-1)}`;
-    }
-  }
-  if (typeof code === "string" && /^[a-z0-9_]{2,40}$/i.test(code)) {
-    return code.toUpperCase();
-  }
-  return "API_STARTUP_FAILED";
-}
-
 export default async function handler(request: Request, response: Response): Promise<void> {
   try {
     restoreRewrittenPath(request);
@@ -107,15 +83,9 @@ export default async function handler(request: Request, response: Response): Pro
   } catch (error) {
     console.error("[api/index] Failed to initialize or dispatch the API request:", error);
     if (!response.headersSent && !response.writableEnded) {
-      response
-        .status(500)
-        .json({
-          error: {
-            code: "INTERNAL_ERROR",
-            message: "An unexpected error occurred.",
-            diagnostic: safeStartupDiagnostic(error),
-          },
-        });
+      response.status(500).json({
+        error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred." },
+      });
     }
   }
 }

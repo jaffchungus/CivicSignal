@@ -321,14 +321,14 @@ export function createAdminRouter(deps: { database: CivicDatabase }): Router {
     const admin = currentUser(request);
     const input = categorySchema.parse(request.body);
     const organization = (await database
-      .prepare("SELECT id FROM organizations WHERE id = ?")
+      .prepare("SELECT id FROM organizations WHERE id = ? AND active = 1")
       .get(input.organizationId)) as { id: string } | undefined;
     if (!organization) {
       throw new ApiError(
         422,
         "VALIDATION_ERROR",
         "The request contains invalid fields.",
-        { organizationId: ["Select an existing organization."] },
+        { organizationId: ["Select an active organization that can receive reports."] },
       );
     }
     const id = randomUUID();

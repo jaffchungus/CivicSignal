@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
 import { useAuth } from "./lib/auth";
+import { useAction } from "./lib/hooks";
 import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
 import { NotificationsPage } from "./pages/NotificationsPage";
@@ -21,18 +22,21 @@ function AccountState({
   description: string;
 }) {
   const { signOut } = useAuth();
+  const action = useAction();
   return (
     <section className="card narrow">
       <h1>{title}</h1>
       <p>{description}</p>
+      {action.error && <p className="error" role="alert">{action.error}</p>}
       <button
         type="button"
         className="button"
+        disabled={action.pending}
         onClick={() => {
-          void signOut();
+          void action.run(signOut);
         }}
       >
-        Sign out
+        {action.pending ? "Signing out…" : "Sign out"}
       </button>
     </section>
   );
@@ -45,7 +49,7 @@ function Protected({
   children: ReactNode;
   adminOnly?: boolean;
 }) {
-  const { user, setupRequired, loading } = useAuth();
+  const { user, setupRequired, loading, sessionExpired } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -56,7 +60,7 @@ function Protected({
       <Navigate
         to={setupRequired ? "/setup" : "/signin"}
         replace
-        state={{ from: location.pathname }}
+        state={{ from: location.pathname, sessionExpired }}
       />
     );
   }
@@ -64,7 +68,7 @@ function Protected({
     return (
       <AccountState
         title="Your account is awaiting verification"
-        description="CivicSignal official accounts must be verified by an administrator before they can access the civic workflow. You will be able to sign in once your account is approved."
+        description="Your request is recorded. An administrator must verify your role and organization before you can use the official workflow. After approval, sign in again to continue."
       />
     );
   }

@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 
 import { Field } from "../components/Field";
+import { StatusBadge } from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { useAction, useFetch } from "../lib/hooks";
@@ -10,10 +12,12 @@ import type {
   AuditEntry,
   Category,
   Organization,
+  Report,
+  ReportListResponse,
   UserRole,
 } from "../../shared/contracts";
 
-type Tab = "users" | "organizations" | "categories" | "audit";
+type Tab = "users" | "organizations" | "categories" | "moderation" | "audit";
 
 function StatusChip({ status }: { status: string }) {
   return (
@@ -56,7 +60,7 @@ function UsersPanel() {
         ? "PUBLIC_SERVICE"
         : null;
   const organizationOptions = expectedKind
-    ? organizations.filter((organization) => organization.kind === expectedKind)
+    ? organizations.filter((organization) => organization.active && organization.kind === expectedKind)
     : [];
 
   return (
@@ -66,7 +70,7 @@ function UsersPanel() {
         grant it access to the civic workflow.
       </p>
       {notice && <p className="flash">{notice}</p>}
-      {error && <p className="error">{error}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
 
       {verifying && (
         <form
@@ -104,27 +108,39 @@ function UsersPanel() {
             </select>
           </Field>
           {expectedKind && (
-            <Field label="Organization">
-              <select
-                className="select"
-                value={verifyForm.organizationId}
-                onChange={(event) =>
-                  setVerifyForm({ ...verifyForm, organizationId: event.target.value })
-                }
-                required
-              >
-                <option value="">Select an organization…</option>
-                {organizationOptions.map((organization) => (
-                  <option key={organization.id} value={organization.id}>
-                    {organization.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <>
+              <Field label="Organization">
+                <select
+                  className="select"
+                  value={verifyForm.organizationId}
+                  onChange={(event) =>
+                    setVerifyForm({ ...verifyForm, organizationId: event.target.value })
+                  }
+                  required
+                >
+                  <option value="">Select an organization…</option>
+                  {organizationOptions.map((organization) => (
+                    <option key={organization.id} value={organization.id}>
+                      {organization.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {organizationOptions.length === 0 && (
+                <p className="warning" role="status">
+                  Add an active organization of this type before verifying the account.
+                </p>
+              )}
+            </>
+          )}
+          {verifyForm.role === "ADMIN" && (
+            <p className="warning" role="alert">
+              Administrator accounts can verify officials, configure routing, and moderate reports.
+            </p>
           )}
           <div className="button-row">
             <button className="button primary" type="submit" disabled={busy}>
-              Verify account
+              {verifyForm.role === "ADMIN" ? "Grant administrator access" : "Verify account"}
             </button>
             <button
               className="button"
@@ -137,6 +153,7 @@ function UsersPanel() {
         </form>
       )}
 
+      <div className="table-scroll" role="region" aria-label="User accounts" tabIndex={0}>
       <table className="table">
         <thead>
           <tr>
@@ -197,6 +214,7 @@ function UsersPanel() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -243,12 +261,13 @@ function OrganizationsPanel() {
             <option value="LAW_ENFORCEMENT">Law enforcement</option>
           </select>
         </Field>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <button className="button primary" type="submit" disabled={busy}>
           Add organization
         </button>
       </form>
 
+      <div className="table-scroll" role="region" aria-label="Organizations" tabIndex={0}>
       <table className="table">
         <thead>
           <tr>
@@ -287,8 +306,12 @@ function OrganizationsPanel() {
               </td>
             </tr>
           ))}
+          {organizations.length === 0 && (
+            <tr><td colSpan={5} className="muted">No organizations configured yet.</td></tr>
+          )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -327,6 +350,11 @@ function CategoriesPanel() {
         }}
       >
         <h3>Add a category</h3>
+        {organizations.filter((organization) => organization.active).length === 0 && (
+          <p className="warning" role="status">
+            Add an active organization before configuring issue categories.
+          </p>
+        )}
         <Field label="Name">
           <input
             className="input"
@@ -354,19 +382,20 @@ function CategoriesPanel() {
             required
           >
             <option value="">Select an organization…</option>
-            {organizations.map((organization) => (
+            {organizations.filter((organization) => organization.active).map((organization) => (
               <option key={organization.id} value={organization.id}>
                 {organization.name}
               </option>
             ))}
           </select>
         </Field>
-        {error && <p className="error">{error}</p>}
-        <button className="button primary" type="submit" disabled={busy}>
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="button primary" type="submit" disabled={busy || organizations.filter((organization) => organization.active).length === 0}>
           Add category
         </button>
       </form>
 
+      <div className="table-scroll" role="region" aria-label="Issue categories" tabIndex={0}>
       <table className="table">
         <thead>
           <tr>
@@ -407,8 +436,12 @@ function CategoriesPanel() {
               </td>
             </tr>
           ))}
+          {categories.length === 0 && (
+            <tr><td colSpan={4} className="muted">No issue categories configured yet.</td></tr>
+          )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -423,7 +456,8 @@ function AuditPanel() {
         Important official and administrative actions, with the responsible account and
         timestamp.
       </p>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="table-scroll" role="region" aria-label="Audit history" tabIndex={0}>
       <table className="table">
         <thead>
           <tr>
@@ -444,8 +478,94 @@ function AuditPanel() {
               </td>
             </tr>
           ))}
+          {entries.length === 0 && (
+            <tr><td colSpan={4} className="muted">No audit activity recorded yet.</td></tr>
+          )}
         </tbody>
       </table>
+      </div>
+    </div>
+  );
+}
+
+function ModerationPanel() {
+  const { data, loading, error, reload } = useFetch<ReportListResponse>("/api/reports?scope=all");
+  const [showAll, setShowAll] = useState(false);
+  const [search, setSearch] = useState("");
+  const reports = data?.reports ?? [];
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visibleReports = reports.filter((report) => {
+    if (!showAll && report.moderationStatus === "VISIBLE") return false;
+    if (!normalizedSearch) return true;
+    return [report.referenceCode, report.title, report.location, report.category.name]
+      .some((value) => value?.toLocaleLowerCase().includes(normalizedSearch));
+  });
+
+  return (
+    <div className="stack">
+      <p className="muted">
+        Review reported content and open a report to hide it, restore it, or remove it from resident views.
+      </p>
+      <div className="filters">
+        <Field label="Show" className="filter-field">
+          <select className="select" value={showAll ? "all" : "review"} onChange={(event) => setShowAll(event.target.value === "all")}>
+            <option value="review">Needs moderation review</option>
+            <option value="all">All reports</option>
+          </select>
+        </Field>
+        <Field label="Search reports" className="filter-field search-field">
+          <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Reference, issue, location, or category" />
+        </Field>
+      </div>
+      {error && (
+        <div className="error" role="alert">
+          <span>{error}</span>
+          <button className="button" type="button" onClick={reload}>Try again</button>
+        </div>
+      )}
+      {loading ? (
+        <p className="centered" role="status">Loading reports…</p>
+      ) : visibleReports.length === 0 ? (
+        <div className="card empty">
+          <h3>{showAll ? "No reports match this search" : "No reports need moderation"}</h3>
+          <p className="muted">{showAll ? "Try a different reference, title, location, or category." : "Reports hidden or removed from resident views will appear here."}</p>
+        </div>
+      ) : (
+        <>
+          <p className="muted" role="status">{visibleReports.length} report{visibleReports.length === 1 ? "" : "s"}</p>
+          <div className="table-scroll" role="region" aria-label="Reports for moderation review" tabIndex={0}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Reference</th>
+                  <th>Issue</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                  <th>Visibility</th>
+                  <th>Updated</th>
+                  <th><span className="sr-only">Action</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleReports.map((report: Report) => (
+                  <tr key={report.id}>
+                    <td className="reference">{report.referenceCode}</td>
+                    <td>
+                      <strong>{report.title}</strong>
+                      <div className="muted">{report.location}</div>
+                    </td>
+                    <td>{report.category.name}</td>
+                    <td><StatusBadge status={report.status} /></td>
+                    <td><StatusChip status={report.moderationStatus ?? "VISIBLE"} /></td>
+                    <td>{formatDateTime(report.updatedAt)}</td>
+                    <td><Link className="button" to={`/reports/${report.id}`}>Review</Link></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -457,6 +577,7 @@ export function AdminPage() {
     { id: "users", label: "Users & verification" },
     { id: "organizations", label: "Organizations" },
     { id: "categories", label: "Categories" },
+    { id: "moderation", label: "Report review" },
     { id: "audit", label: "Audit log" },
   ];
 
@@ -477,6 +598,7 @@ export function AdminPage() {
             key={item.id}
             type="button"
             className={`tab${tab === item.id ? " active" : ""}`}
+            aria-pressed={tab === item.id}
             onClick={() => setTab(item.id)}
           >
             {item.label}
@@ -486,6 +608,7 @@ export function AdminPage() {
       {tab === "users" && <UsersPanel />}
       {tab === "organizations" && <OrganizationsPanel />}
       {tab === "categories" && <CategoriesPanel />}
+      {tab === "moderation" && <ModerationPanel />}
       {tab === "audit" && <AuditPanel />}
     </section>
   );
