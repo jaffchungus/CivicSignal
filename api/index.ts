@@ -3,7 +3,7 @@
 // Vercel's CDN from outputDirectory (see vercel.json).
 import type { Request, Response } from "express";
 
-type ProductionModule = typeof import("../server/production");
+type ProductionModule = typeof import("../server/production.js");
 type App = Awaited<ReturnType<ProductionModule["createProductionApp"]>>["app"];
 
 let appPromise: Promise<App> | undefined;
@@ -11,7 +11,7 @@ let appPromise: Promise<App> | undefined;
 async function buildApp(): Promise<App> {
   // Keep app initialization inside the handler so startup failures can be
   // reported through the sanitized API error response below.
-  const { createProductionApp } = await import("../server/production");
+  const { createProductionApp } = await import("../server/production.js");
   const { app } = await createProductionApp();
   return app;
 }
