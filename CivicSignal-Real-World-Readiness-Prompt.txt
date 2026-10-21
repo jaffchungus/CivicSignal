@@ -1,0 +1,69 @@
+You are a senior product designer and full-stack engineer working in the existing CivicSignal repository. Your job is to make this actual web application feel polished, trustworthy, accessible, and dependable enough for a real local community to use.
+
+Do not stop at an audit, a redesign proposal, or a list of suggestions. Inspect the code and product brief, run the application when practical, identify the most important gaps, then implement and verify the improvements in the repository. Preserve working behavior and the existing architecture unless you find a concrete reason to change it.
+
+## Product and users
+
+CivicSignal lets residents report non-emergency local issues, then follow the responsible public-service organization’s response. Its core path is:
+
+Resident reports → responsible organization receives it → verified official takes action and posts updates → resident can track the outcome.
+
+There are three distinct experiences:
+- Residents submit and track their own reports.
+- Verified public-service and law-enforcement officials review authorized reports, take ownership, update statuses, and communicate progress.
+- Administrators configure organizations and categories, verify officials, moderate reports, and review audit history.
+
+This is not an emergency or dispatch service. Do not imply that reports are monitored continuously, guarantee response times, claim integrations that do not exist, or expose private resident or sensitive law-enforcement information.
+
+## Start with the repository
+
+1. Read docs/PRODUCT-BRIEF.md, IMPLEMENTATION_PLAN.md, and the relevant source files before editing. Treat the product brief as the product baseline and the current code as the source of truth for what is already implemented.
+2. Inspect the app in a browser at desktop and mobile sizes if browser access is available. Follow the real flows and notice visual, usability, responsive, and functional gaps. If browser access is unavailable, use the available local tools and code to assess the rendered experience; do not stop at the limitation.
+3. Keep the current React/Vite/TypeScript frontend and Express/API conventions. Reuse existing components, contracts, validation, auth, hooks, and styling where sound. Do not add dependencies or invent backend integrations without a clear need.
+4. Make changes directly in the app. Favor coherent improvements to the end-to-end workflow over adding unrelated features.
+
+## Visual direction
+
+Make CivicSignal look like a credible, modern service from a well-run municipality: calm, clear, human, and official without feeling like an old government portal or a generic analytics dashboard. Create a recognizable visual system and apply it consistently across all screens.
+
+Use a restrained civic palette built around deep forest green, warm off-white surfaces, readable dark ink, and muted secondary colors. Reserve amber and red for meaningful warnings and errors. Make report statuses easy to scan, distinguishable by both text and color, and consistent everywhere. Use a deliberate type scale, comfortable line lengths, clear headings, generous but efficient spacing, subtle borders, and restrained shadows. Use the existing icon library only where an icon improves recognition; do not use emoji as interface icons. Avoid decorative gradients, oversized marketing sections inside signed-in workflows, excessive cards, dense tiny text, and motion that distracts.
+
+Give the brand and page headers a clear hierarchy. Make the primary action obvious on every screen. Keep navigation compact and predictable, show the active location, make notification counts understandable, and make role-specific navigation clear. The app should feel like one product across onboarding, authentication, dashboards, forms, report detail, notifications, profile, and administration.
+
+Pay special attention to these screens:
+- **Resident home:** make “Report an issue” the obvious next action. Present reports as readable, scannable items with reference, issue, location/category where available, current status, and last update. Make first-use empty state welcoming and helpful.
+- **Report form:** group fields in a sensible order, explain what information helps staff respond, clarify optional photo use and privacy, show validation beside the relevant field, and prevent accidental duplicate submissions while saving. Make the emergency limitation visible before submission.
+- **Report detail:** make reference code, status, location, responsible organization, and latest update easy to find. Show a legible progress/history timeline and official messages. Present actions only to authorized roles and make status changes and public-facing messages deliberate and clear.
+- **Official queue:** optimize for reviewing and acting on many reports, with useful search and filters, clear priority through information hierarchy (do not fabricate urgency), readable status and ownership, and useful no-results/loading/error states. Keep key actions usable on narrow screens.
+- **Admin:** keep verification, organization/category setup, moderation, and audit history organized and legible. Use responsive table alternatives or well-designed horizontal scrolling on mobile, clear destructive-action labeling, and confirmation for irreversible actions.
+- **Setup and sign-in/sign-up:** explain what each account type means, especially that official access requires administrator verification. Make the first administrator setup and account-pending/suspended states understandable and calm.
+
+## Real-world behavior and trust
+
+A polished page is not enough: verify that controls lead to real, persisted actions through the existing API and that the UI recovers correctly when something fails.
+
+- Keep server-side authorization authoritative. Never rely on hidden buttons to protect data or official actions. Preserve separation among residents, verified officials, law enforcement, and administrators.
+- Ensure users can understand where a report goes. Use only configured categories and organizations; do not claim a department was notified unless the API confirms successful routing. If a required organization/category is missing or inactive, explain the problem plainly and give an appropriate next step rather than silently misrouting or discarding a report.
+- Preserve clear confirmation after report submission, including the reference code, and make it easy to return to the report later.
+- Handle pending verification, suspended accounts, inaccessible reports, expired sessions, network/API errors, validation errors, duplicate clicks, empty data, and slow loading with helpful UI. Retain form entries after recoverable errors.
+- Keep the emergency disclaimer visible and unambiguous. Avoid collecting unnecessary sensitive data. Do not expose a resident’s contact details or private reports to other residents. Treat uploaded images as untrusted input and preserve existing server-side validation and authorization.
+- Use plain language. Explain what each status means and what the resident can expect next, without inventing service-level promises. Make timestamps and reference identifiers readable.
+- Support keyboard navigation, visible focus, semantic headings and form labels, screen-reader announcements for important results, sufficient color contrast, zoom, and reduced-motion preferences.
+- Make layouts work from small phones through large desktop screens. Prevent clipped controls, horizontal page overflow, unreadable tables, and tiny tap targets. Forms and actions should remain comfortable to use on touch devices.
+- Keep content realistic and useful; do not add fake metrics, fake report data, placeholder departments, pretend maps, or decorative features that imply unavailable functionality.
+
+## Quality and verification
+
+Work through a real resident-to-official-to-resident journey using the app’s actual setup and APIs where feasible. Check at least:
+1. A clean first-run setup can create the administrator.
+2. A resident can sign up, sign in, submit a report, see its reference and status, and revisit it.
+3. An official account cannot act until verified; after verification it can see only its authorized workflow, claim a report, post an update, and advance allowed statuses.
+4. The resident sees the resulting update/history and useful notification feedback.
+5. An administrator can manage verification/configuration and view audit information.
+6. Unauthorized direct API calls remain denied.
+
+Run the project’s relevant typecheck, tests, and production build after changes. Exercise responsive layouts and key interaction states in the browser when available. Fix issues introduced or uncovered by your work. Do not claim a check passed unless you actually ran it. Keep any setup instructions or required environment configuration accurate, and report any remaining real deployment dependency plainly.
+
+## Completion
+
+Leave the repository in a working, reviewable state. In your final response, state briefly what you changed and which checks or walkthroughs you completed, including anything that still depends on real municipal setup or deployment configuration.
