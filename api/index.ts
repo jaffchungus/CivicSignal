@@ -71,6 +71,22 @@ function dispatch(app: App, request: Request, response: Response): Promise<void>
   });
 }
 
+function safeStartupDiagnostic(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("CONNECTION_STRING or DB_PASSWORD is required")) {
+    return "MISSING_DATABASE_CONFIG";
+  }
+  if (message.includes("must be a Postgres connection string")) {
+    return "INVALID_DATABASE_URL";
+  }
+
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && /^[a-z0-9_]{2,40}$/i.test(code)) {
+    return code.toUpperCase();
+  }
+  return "API_STARTUP_FAILED";
+}
+
 export default async function handler(request: Request, response: Response): Promise<void> {
   try {
     restoreRewrittenPath(request);
@@ -86,7 +102,13 @@ export default async function handler(request: Request, response: Response): Pro
     if (!response.headersSent && !response.writableEnded) {
       response
         .status(500)
-        .json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred." } });
+        .json({
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "An unexpected error occurred.",
+            diagnostic: safeStartupDiagnostic(error),
+          },
+        });
     }
   }
 }
