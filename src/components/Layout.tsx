@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { MapPin } from "lucide-react";
 
@@ -13,7 +14,7 @@ function roleLabel(role: string): string {
 }
 
 export function Layout() {
-  const { user, signOut, loadError, refresh } = useAuth();
+  const { user, setupRequired, signOut, loadError, refresh } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { unreadCount } = useNotifications();
@@ -25,6 +26,34 @@ export function Layout() {
       ? "Department queue"
       : "My reports";
 
+  useEffect(() => {
+    const path = location.pathname;
+    const page = path === "/privacy"
+      ? { title: "Privacy", description: "What CivicSignal stores, who can access a report, and the limitations of this demo deployment." }
+      : path === "/terms"
+        ? { title: "Terms and limitations", description: "CivicSignal is an independent, non-emergency community-reporting project." }
+        : path === "/signin"
+          ? { title: "Sign in", description: "Sign in to submit a non-emergency community report or follow an existing report." }
+          : path === "/signup"
+            ? { title: "Create an account", description: "Create a CivicSignal account to report non-emergency community issues and follow updates." }
+            : path === "/reports/new"
+              ? { title: "Report an issue", description: "Submit a non-emergency community issue to a configured organization." }
+              : path === "/admin"
+                ? { title: "Administration", description: "Manage CivicSignal accounts, organizations, issue categories, and moderation." }
+                : path === "/notifications"
+                  ? { title: "Notifications", description: "Review updates about your CivicSignal reports." }
+                  : path === "/profile"
+                    ? { title: "Profile", description: "Manage your CivicSignal account details and password." }
+                    : path.startsWith("/reports/")
+                      ? { title: "Report details", description: "View the recorded status, official updates, and history for a CivicSignal report." }
+                      : user
+                        ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
+                        : { title: "Community issue reporting", description: "Report a neighborhood issue and see what happens next. CivicSignal is not an emergency service." };
+    document.title = `${page.title} · CivicSignal`;
+    const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (description) description.content = page.description;
+  }, [location.pathname, user, homeLabel]);
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -33,7 +62,7 @@ export function Layout() {
             <MapPin aria-hidden="true" size={21} strokeWidth={2.4} />
             <span>CivicSignal</span>
           </Link>
-          {user && (
+          {user ? (
             <nav className="topnav" aria-label="Main navigation">
               <NavLink to="/" end>
                 {homeLabel}
@@ -67,6 +96,11 @@ export function Layout() {
                 {signOutAction.pending ? "Signing out…" : "Sign out"}
               </button>
             </nav>
+          ) : (
+            <nav className="topnav" aria-label="Main navigation">
+              <NavLink to="/signin">Sign in</NavLink>
+              <NavLink className="button primary topbar-cta" to={setupRequired ? "/setup" : "/signup"}>Get started</NavLink>
+            </nav>
           )}
         </div>
       </header>
@@ -92,6 +126,7 @@ export function Layout() {
       <footer className="footer">
         <strong>Not for emergencies.</strong> CivicSignal is not monitored as an emergency
         service. If someone is in immediate danger, call 911.
+        <span className="footer-links"><Link to="/privacy">Privacy</Link><Link to="/terms">Terms and limitations</Link></span>
       </footer>
     </div>
   );

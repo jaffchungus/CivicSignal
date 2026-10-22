@@ -10,6 +10,33 @@ afterEach(async () => {
 });
 
 describe("authentication", () => {
+  it("marks session, setup, and protected API responses private and non-cacheable", async () => {
+    const app = await testApplication();
+
+    for (const response of await Promise.all([
+      request(app).get("/api/auth/session"),
+      request(app).get("/api/setup/status"),
+      request(app).get("/api/reports"),
+    ])) {
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+    }
+    expect((await request(app).get("/api/reports")).status).toBe(401);
+  });
+
+  it("limits repeated sign-in attempts from one client", async () => {
+    const app = await testApplication();
+    const attempts = await Promise.all(
+      Array.from({ length: 11 }, () =>
+        request(app).post("/api/auth/login").send({ email: "nobody@example.test", password: "wrong" }),
+      ),
+    );
+
+    expect(attempts.slice(0, 10).every((response) => response.status === 401)).toBe(true);
+    expect(attempts[10].status).toBe(429);
+    expect(attempts[10].headers["cache-control"]).toBe("private, no-store");
+    expect(attempts[10].body.error.code).toBe("RATE_LIMITED");
+  });
+
   it("registers residents, rejects duplicates and self-declared administrators", async () => {
     const app = await testApplication();
 

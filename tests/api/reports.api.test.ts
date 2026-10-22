@@ -191,6 +191,28 @@ describe("photo attachments", () => {
     expect(readdirSync(uploadDirectory)).toHaveLength(0);
   });
 
+  it("rejects an image MIME type when the bytes are not actually an image", async () => {
+    const { uploadDirectory, residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+
+    const rejected = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Report with spoofed image content")
+      .field("description", "This file claims to be PNG but contains plain text.")
+      .field("location", "Nowhere Street 3")
+      .attach("photo", Buffer.from("not actually a png"), {
+        filename: "photo.png",
+        contentType: "image/png",
+      });
+
+    expect(rejected.status).toBe(415);
+    expect(rejected.body.error.code).toBe("INVALID_IMAGE_CONTENT");
+    expect((await residentAgent.get("/api/reports?scope=mine").expect(200)).body.reports)
+      .toHaveLength(0);
+    expect(readdirSync(uploadDirectory)).toHaveLength(0);
+  });
+
   it("rejects an oversize attachment with a clean 400 and persists nothing", async () => {
     const { uploadDirectory, residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");

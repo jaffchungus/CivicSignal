@@ -134,6 +134,14 @@ describe("civic report workflow", () => {
     expect(claimed.body.assignedTo).toMatchObject({ displayName: "Olive Official" });
     expect(claimed.body.canClaim).toBe(false);
 
+    // A retry after a lost response is idempotent and does not duplicate history.
+    const repeatedClaim = await officialAgent
+      .post(`/api/reports/${reportId}/claim`)
+      .expect(200);
+    expect(repeatedClaim.body.timeline.filter(
+      (entry: { action: string }) => entry.action === "REPORT_CLAIMED",
+    )).toHaveLength(1);
+
     // Admin assignment is not part of the product; the route must remain absent
     // and the claim flow must keep working without it.
     expect(claimed.body.capabilities).not.toHaveProperty("canAssign");
@@ -148,13 +156,13 @@ describe("civic report workflow", () => {
       .expect(201);
     expect(withUpdate.body.updates).toHaveLength(1);
 
-    await officialAgent
-      .post(`/api/reports/${reportId}/status`)
-      .send({ status: "UNDER_REVIEW" })
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.status).toBe("UNDER_REVIEW");
-      });
+    const competingTransitions = await Promise.all([
+      officialAgent.post(`/api/reports/${reportId}/status`).send({ status: "UNDER_REVIEW" }),
+      officialAgent.post(`/api/reports/${reportId}/status`).send({ status: "UNDER_REVIEW" }),
+    ]);
+    expect(competingTransitions.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(competingTransitions.find((response) => response.status === 200)?.body.status)
+      .toBe("UNDER_REVIEW");
 
     // Only allowed transitions are accepted.
     await officialAgent

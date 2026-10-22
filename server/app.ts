@@ -39,10 +39,16 @@ export function createApp(options: AppOptions) {
   if (process.env.VERCEL) {
     app.set("trust proxy", 1);
   }
+  // API responses include account state, private reports, notifications, and
+  // authorization-dependent attachment data. Never let a shared cache retain them.
+  app.use("/api", (_request, response, next) => {
+    response.setHeader("Cache-Control", "private, no-store");
+    next();
+  });
   app.use(
     helmet({
       contentSecurityPolicy: {
-        directives: { imgSrc: ["'self'", "data:", "https:"] },
+      directives: { imgSrc: ["'self'", "data:"] },
       },
     }),
   );
@@ -55,7 +61,24 @@ export function createApp(options: AppOptions) {
     limit: 100,
     standardHeaders: true,
     legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many authentication requests. Please wait before trying again." } },
   });
+  const signInLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Wait before trying again." } },
+  });
+  const registrationLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many account creation attempts. Try again later." } },
+  });
+  app.post("/api/auth/login", signInLimiter);
+  app.post("/api/auth/register", registrationLimiter);
   app.use("/api/auth", authLimiter);
   app.use("/api/setup", authLimiter);
 

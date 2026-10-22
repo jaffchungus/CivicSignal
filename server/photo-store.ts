@@ -8,6 +8,12 @@ import path from "node:path";
 import { ApiError } from "./http.js";
 
 const ALLOWED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
+const IMAGE_EXTENSIONS_BY_TYPE: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
 
 export type StoredPhoto = { storedName: string };
 
@@ -20,7 +26,10 @@ export type PhotoStore = {
 };
 
 /** Stored names always carry an allowed image extension, or .bin. */
-export function photoExtension(originalName: string): string {
+export function photoExtension(originalName: string, contentType?: string): string {
+  if (contentType && IMAGE_EXTENSIONS_BY_TYPE[contentType]) {
+    return IMAGE_EXTENSIONS_BY_TYPE[contentType];
+  }
   const extension = originalName.includes(".")
     ? `.${originalName.split(".").pop()?.toLowerCase() ?? ""}`
     : "";
@@ -35,8 +44,8 @@ export class DiskPhotoStore implements PhotoStore {
     mkdirSync(directory, { recursive: true });
   }
 
-  save(buffer: Buffer, originalName: string): Promise<StoredPhoto> {
-    const storedName = `${randomUUID()}${photoExtension(originalName)}`;
+  save(buffer: Buffer, originalName: string, contentType?: string): Promise<StoredPhoto> {
+    const storedName = `${randomUUID()}${photoExtension(originalName, contentType)}`;
     writeFileSync(path.join(this.directory, storedName), buffer);
     return Promise.resolve({ storedName });
   }

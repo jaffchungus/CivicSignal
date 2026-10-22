@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import multer from "multer";
 import { z } from "zod";
 
@@ -33,6 +34,26 @@ const ALLOWED_IMAGE_TYPES = new Set([
   "image/webp",
   "image/gif",
 ]);
+
+function actualImageType(buffer: Buffer): string | null {
+  if (
+    buffer.length >= 24 &&
+    buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) &&
+    buffer.toString("ascii", 12, 16) === "IHDR"
+  ) return "image/png";
+  if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.toString("ascii", 0, 6))) {
+    return "image/gif";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
+  ) return "image/webp";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  return null;
+}
 
 const EVENT_TYPES: Record<string, string> = {
   REPORT_CREATED: "created",
@@ -335,6 +356,13 @@ export function createReportsRouter(deps: {
 }): Router {
   const { database, photos } = deps;
   const router = Router();
+  const reportCreationLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many reports were submitted from this connection. Wait before sending another report." } },
+  });
 
   // Photos are buffered and handed to the photo store only once accepted, so
   // nothing is written for requests rejected by the file filter or size limit.
@@ -342,7 +370,7 @@ export function createReportsRouter(deps: {
     storage: multer.memoryStorage(),
     limits: { fileSize: ATTACHMENT_LIMIT_BYTES, files: 1 },
     fileFilter: (_request, file, callback) => {
-      if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
+      if (!ALLOWED_IMAGE_TYPES.has(file.mimetype.toLowerCase())) {
         callback(
           new ApiError(
             415,
@@ -424,6 +452,7 @@ export function createReportsRouter(deps: {
     "/",
     authenticate(database),
     requireRole("RESIDENT"),
+    reportCreationLimiter,
     upload.single("photo"),
     async (request, response) => {
       const user = currentUser(request);
@@ -452,8 +481,16 @@ export function createReportsRouter(deps: {
       const reportId = randomUUID();
 
       const file = request.file;
+      const fileContentType = file ? actualImageType(file.buffer) : null;
+      if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
+        throw new ApiError(
+          415,
+          "INVALID_IMAGE_CONTENT",
+          "The file contents do not match a supported image type.",
+        );
+      }
       const storedPhoto = file
-        ? await photos.save(file.buffer, file.originalname, file.mimetype)
+        ? await photos.save(file.buffer, file.originalname, fileContentType!)
         : null;
 
       await database.transaction(async () => {
@@ -499,7 +536,7 @@ export function createReportsRouter(deps: {
               reportId,
               file.originalname,
               storedPhoto.storedName,
-              file.mimetype,
+              fileContentType!,
               file.size,
               now,
             );
@@ -588,9 +625,24 @@ export function createReportsRouter(deps: {
         );
       }
 
-      await database
-        .prepare("UPDATE reports SET assigned_user_id = ?, updated_at = ? WHERE id = ?")
-        .run(user.id, Date.now(), row.id);
+      const claim = await database
+        .prepare(
+          `UPDATE reports SET assigned_user_id = ?, updated_at = ?
+           WHERE id = ? AND assigned_user_id IS NULL RETURNING id`,
+        )
+        .get(user.id, Date.now(), row.id) as { id: string } | undefined;
+      if (!claim) {
+        const current = await loadReport(database, row.id);
+        if (current.assigned_user_id === user.id) {
+          response.json(await serializeDetail(database, current, user));
+          return;
+        }
+        throw new ApiError(
+          409,
+          "ALREADY_CLAIMED",
+          "Another official is already handling this report.",
+        );
+      }
       await recordReportEvent(database, {
         reportId: row.id,
         actorUserId: user.id,
@@ -637,9 +689,19 @@ export function createReportsRouter(deps: {
         );
       }
 
-      await database
-        .prepare("UPDATE reports SET status = ?, updated_at = ? WHERE id = ?")
-        .run(input.status, Date.now(), row.id);
+      const transition = await database
+        .prepare(
+          `UPDATE reports SET status = ?, updated_at = ?
+           WHERE id = ? AND status = ? RETURNING id`,
+        )
+        .get(input.status, Date.now(), row.id, row.status) as { id: string } | undefined;
+      if (!transition) {
+        throw new ApiError(
+          409,
+          "REPORT_CHANGED",
+          "This report changed while you were updating it. Reload the report and try again.",
+        );
+      }
       await recordReportEvent(database, {
         reportId: row.id,
         actorUserId: user.id,

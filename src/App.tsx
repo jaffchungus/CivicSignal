@@ -6,6 +6,7 @@ import { useAuth } from "./lib/auth";
 import { useAction } from "./lib/hooks";
 import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
+import { LandingPage } from "./pages/LandingPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { ReportCreatePage } from "./pages/ReportCreatePage";
@@ -13,6 +14,7 @@ import { ReportDetailPage } from "./pages/ReportDetailPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SignInPage } from "./pages/SignInPage";
 import { SignUpPage } from "./pages/SignUpPage";
+import { PrivacyPage, TermsPage } from "./pages/TrustPages";
 
 function AccountState({
   title,
@@ -86,20 +88,25 @@ function Protected({
   return <>{children}</>;
 }
 
+function HomeRoute() {
+  const { user, loading, setupRequired } = useAuth();
+  if (loading) return <p className="centered" role="status">Loading CivicSignal…</p>;
+  if (!user) return <LandingPage setupRequired={setupRequired} />;
+  return <Protected><HomePage /></Protected>;
+}
+
 export default function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
         <Route path="/setup" element={<SetupPage />} />
         <Route path="/signin" element={<SignInPage />} />
         <Route path="/signup" element={<SignUpPage />} />
         <Route
           path="/"
-          element={
-            <Protected>
-              <HomePage />
-            </Protected>
-          }
+          element={<HomeRoute />}
         />
         <Route
           path="/reports/new"

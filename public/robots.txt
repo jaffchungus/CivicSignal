@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /notifications
+Disallow: /profile
+Disallow: /reports/
+Disallow: /setup
+Disallow: /signin
+Disallow: /signup
+
+Sitemap: https://civicsignal-tau.vercel.app/sitemap.xml

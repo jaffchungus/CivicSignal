@@ -6,6 +6,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { useAction, useFetch } from "../lib/hooks";
+import { reportGuidance } from "../lib/report-guidance";
 import {
   reportStatusLabel,
   type Report,
@@ -26,21 +27,6 @@ function timelineText(entry: ReportTimelineEntry): string {
     return `Status changed from ${reportStatusLabel(entry.fromStatus ?? "")} to ${reportStatusLabel(entry.toStatus ?? "")}`;
   }
   return entry.message ?? ACTION_LABELS[entry.action ?? ""] ?? "Update";
-}
-
-function statusGuidance(status: ReportStatus): string {
-  switch (status) {
-    case "SUBMITTED":
-      return "The report has been sent to the configured organization and is waiting for an official to review it.";
-    case "UNDER_REVIEW":
-      return "An official is reviewing the report and deciding what action is appropriate.";
-    case "IN_PROGRESS":
-      return "The organization has marked this report as in progress. Check the updates below for details.";
-    case "RESOLVED":
-      return "The organization has marked this issue as resolved. If the issue remains, contact the organization through its usual public channels.";
-    case "CLOSED":
-      return "The report is closed. Its history and any official updates remain available here.";
-  }
 }
 
 export function ReportDetailPage() {
@@ -83,6 +69,7 @@ export function ReportDetailPage() {
   }
 
   const capabilities = report.capabilities ?? {};
+  const guidance = reportGuidance(report.status);
 
   return (
     <section className="detail">
@@ -102,7 +89,14 @@ export function ReportDetailPage() {
           </div>
           <StatusBadge status={report.status} />
         </div>
-        <p className="status-guidance">{statusGuidance(report.status)}</p>
+        <section className="next-step" aria-labelledby="next-step-heading">
+          <div className="next-step-status"><span>Current step</span><strong>{reportStatusLabel(report.status)}</strong></div>
+          <div>
+            <h2 id="next-step-heading">{guidance.heading}</h2>
+            <p>{guidance.explanation}</p>
+            <p><strong>Your next step:</strong> {guidance.residentAction}</p>
+          </div>
+        </section>
 
         <dl className="meta-grid">
           <div>
@@ -343,6 +337,7 @@ export function ReportDetailPage() {
 
       <div className="card">
         <h2>History</h2>
+        <p className="muted">A record of activity entered in CivicSignal. Status changes show who recorded them and when; official updates appear above.</p>
         <ul className="timeline">
           {(report.timeline ?? []).map((entry) => (
             <li key={entry.id}>
