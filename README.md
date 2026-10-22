@@ -47,6 +47,8 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 
 The Supabase and Vercel configuration details, including private storage requirements and limitations, are in [docs/SUPABASE-DEPLOYMENT.md](docs/SUPABASE-DEPLOYMENT.md). `.env.example` contains placeholders only.
 
+See [docs/REAL-WORLD-READINESS.md](docs/REAL-WORLD-READINESS.md) for the current provider/configuration gaps, guest report link behavior, and launch requirements.
+
 ## Database and deployment safety
 
 The application creates/updates its own schema through adapter initialization. Review `server/database-sqlite.ts` and `server/database-postgres.ts` before changing schema behavior. Do not point local setup, migrations, or test code at production. Back up any populated database before changing the deployed schema or storage provider. There is no production-data seeding command.

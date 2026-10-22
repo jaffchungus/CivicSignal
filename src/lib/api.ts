@@ -28,6 +28,7 @@ async function parseResponse<T>(response: Response, path: string): Promise<T> {
     if (
       response.status === 401 &&
       typeof window !== "undefined" &&
+      !path.includes("/guest") &&
       !["/api/auth/login", "/api/auth/register", "/api/auth/session", "/api/setup/status"].includes(
         path.split("?")[0],
       )
@@ -69,6 +70,35 @@ export function errorDetails(error: unknown): {
 export const api = {
   get<T>(path: string): Promise<T> {
     return request<T>(path);
+  },
+  getWithGuestAccess<T>(path: string, token: string): Promise<T> {
+    return request<T>(path, { headers: { "X-Guest-Access": token } });
+  },
+  postWithGuestAccess<T>(path: string, token: string, body?: unknown): Promise<T> {
+    return request<T>(path, {
+      method: "POST",
+      headers: {
+        "X-Guest-Access": token,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  },
+  getGuestPhoto(path: string, token: string): Promise<Blob> {
+    return fetch(path, {
+      credentials: "same-origin",
+      headers: { "X-Guest-Access": token },
+    }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as Partial<ApiErrorBody> | null;
+        throw new ApiRequestError(
+          response.status,
+          body?.error?.code ?? "REQUEST_FAILED",
+          body?.error?.message ?? "This photo is unavailable.",
+        );
+      }
+      return response.blob();
+    });
   },
   post<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, {

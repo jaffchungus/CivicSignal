@@ -110,12 +110,9 @@ export default function App() {
         />
         <Route
           path="/reports/new"
-          element={
-            <Protected>
-              <ReportCreatePage />
-            </Protected>
-          }
+          element={<ReportCreatePage />}
         />
+        <Route path="/track/:reportId" element={<ReportDetailPage publicTracking />} />
         <Route
           path="/reports/:reportId"
           element={

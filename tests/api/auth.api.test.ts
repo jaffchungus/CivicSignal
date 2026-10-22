@@ -25,11 +25,12 @@ describe("authentication", () => {
 
   it("limits repeated sign-in attempts from one client", async () => {
     const app = await testApplication();
-    const attempts = await Promise.all(
-      Array.from({ length: 11 }, () =>
-        request(app).post("/api/auth/login").send({ email: "nobody@example.test", password: "wrong" }),
-      ),
-    );
+    const attempts = [];
+    for (let attempt = 0; attempt < 11; attempt += 1) {
+      attempts.push(await request(app)
+        .post("/api/auth/login")
+        .send({ email: "nobody@example.test", password: "wrong" }));
+    }
 
     expect(attempts.slice(0, 10).every((response) => response.status === 401)).toBe(true);
     expect(attempts[10].status).toBe(429);

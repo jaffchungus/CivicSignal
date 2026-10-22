@@ -17,8 +17,8 @@ export function reportGuidance(status: ReportStatus): ReportGuidance {
       };
     case "UNDER_REVIEW":
       return {
-        heading: "The organization is reviewing it",
-        explanation: "An official has marked the report for review and is assessing what action is appropriate.",
+        heading: "In the review queue",
+        explanation: "The report is waiting for the organization to assess what action is appropriate.",
         residentAction: "Look for an official update here if the organization shares more detail.",
       };
     case "IN_PROGRESS":
@@ -31,13 +31,13 @@ export function reportGuidance(status: ReportStatus): ReportGuidance {
       return {
         heading: "The organization marked it resolved",
         explanation: "This is the status recorded by the organization in CivicSignal; it is not an independent inspection.",
-        residentAction: "If the issue remains, contact the organization through its usual public channels.",
+        residentAction: "A resident can mark this as still happening to return it for staff review.",
       };
     case "CLOSED":
       return {
         heading: "This report is closed",
         explanation: "No further workflow step is currently open for this report. Its recorded updates and history remain on this page.",
-        residentAction: "If the issue returns, contact the organization through its usual public channels.",
+        residentAction: "A resident can mark this as still happening to return it for staff review.",
       };
   }
 }

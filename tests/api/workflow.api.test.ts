@@ -164,6 +164,22 @@ describe("civic report workflow", () => {
     expect(competingTransitions.find((response) => response.status === 200)?.body.status)
       .toBe("UNDER_REVIEW");
 
+    await residentAgent.get("/api/reports/impact?days=30").expect(403);
+    await officialAgent
+      .get("/api/reports/impact?days=30")
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          reportsReceived: 1,
+          openReports: 1,
+          completedReports: 0,
+          stillHappeningConfirmations: 0,
+        });
+        expect(body.range.days).toBe(30);
+        expect(body.medianHoursToFirstReview).toEqual(expect.any(Number));
+        expect(body.source).toContain("CivicSignal report and report-event records");
+      });
+
     // Only allowed transitions are accepted.
     await officialAgent
       .post(`/api/reports/${reportId}/status`)

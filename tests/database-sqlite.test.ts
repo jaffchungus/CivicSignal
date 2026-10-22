@@ -12,6 +12,41 @@ import { createSqliteDatabase } from "../server/database-sqlite";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("upgrades the report owner column for secure guest reports", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "civicsignal-guest-migration-"));
+  const filename = path.join(directory, "legacy.db");
+  const legacy = new Database(filename);
+  legacy.exec(`
+    CREATE TABLE reports (
+      id TEXT PRIMARY KEY,
+      reference_code TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      location TEXT NOT NULL,
+      category_id TEXT NOT NULL,
+      organization_id TEXT NOT NULL,
+      reporter_user_id TEXT NOT NULL,
+      assigned_user_id TEXT,
+      status TEXT NOT NULL,
+      moderation_status TEXT NOT NULL DEFAULT 'VISIBLE',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  legacy.close();
+  const database = await createSqliteDatabase(filename);
+  try {
+    const columns = await database.prepare("PRAGMA table_info(reports)").all() as Array<{ name: string; notnull: number }>;
+    expect(columns.find((column) => column.name === "reporter_user_id")?.notnull).toBe(0);
+    expect(await database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'guest_report_access'").get())
+      .toEqual({ name: "guest_report_access" });
+    expect(await database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    await database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("yields while another adapter owns the write lock without replaying callbacks", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "civicsignal-locking-"));
   const filename = path.join(directory, "test.db");

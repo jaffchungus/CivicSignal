@@ -21,6 +21,6 @@ describe("report guidance", () => {
       heading: "The organization marked it resolved",
     });
     expect(reportGuidance("RESOLVED").explanation).toContain("not an independent inspection");
-    expect(reportGuidance("RESOLVED").residentAction).toContain("usual public channels");
+    expect(reportGuidance("RESOLVED").residentAction).toContain("still happening");
   });
 });

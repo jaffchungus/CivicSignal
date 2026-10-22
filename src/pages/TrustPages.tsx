@@ -11,15 +11,19 @@ export function PrivacyPage() {
       <ul>
         <li>Account display name and email address. Passwords are stored as password hashes, not as readable passwords.</li>
         <li>A session cookie in your browser; the server stores a hash of the session token and an expiry time.</li>
-        <li>Report title, description, category, location, status history, official updates, and related notifications.</li>
-        <li>An optional photo attached to a report, if you choose to upload one.</li>
+        <li>Report issue type, optional summary and details, exact location, status history, official updates, and related notifications.</li>
+        <li>An optional photo, if you choose to upload one. Text drafts are stored in this browser; selected photos are not saved in drafts.</li>
+        <li>For a report sent without an account, a random secure tracking token is issued. The server stores only its hash. The link grants access to that report for 90 days.</li>
       </ul>
 
       <h2>Who can see a report</h2>
-      <p>Residents can see their own reports. Active staff assigned to the configured organization can see reports routed to that organization. Administrators can access reports for platform management. Attachments are served through the same report-authorization check.</p>
+      <p>Account holders can see their own reports. A guest report can be viewed by anyone with its private tracking link. Active staff in the configured receiving organization and administrators can access reports for their work. Reports are not listed publicly. Photos and exact locations are shared with those authorized viewers. Account display names appear on account reports; CivicSignal does not ask for contact details on guest reports, and staff report views do not include account email addresses.</p>
+
+      <h2>Updates and contact</h2>
+      <p>Account holders receive in-app notifications. Guest reporters follow updates through their private tracking link. This deployment has no configured email or text-message sender, so it does not send those notifications or collect contact details for that purpose.</p>
 
       <h2>Storage and retention</h2>
-      <p>The application writes account and report records to the deployment's configured database. New photos use the configured private storage provider. Older deployments may contain legacy public Blob objects; those objects need a provider-side migration before they can be treated as private. This project does not implement an automatic retention schedule, account deletion, or a resident self-service report deletion tool.</p>
+      <p>The application writes account and report records to the deployment's configured database. Guest tracking tokens expire after 90 days; report data and photos do not have an automatic deletion schedule in this project. New photos use the configured private storage provider. Older deployments may contain legacy public Blob objects; those objects need a provider-side migration before they can be treated as private. This project does not implement account deletion or a resident self-service report deletion tool.</p>
 
       <h2>Before using a live deployment</h2>
       <p>The current public page does not name a deployment operator or provide a support contact. Until the operator publishes that information and confirms the applicable retention and storage settings, do not submit sensitive personal information, images of people, license plates, or information about emergencies.</p>

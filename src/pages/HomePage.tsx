@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { ReportTable } from "../components/ReportTable";
 import { useAuth } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
+import { formatDate } from "../lib/format";
 import { Field } from "../components/Field";
 import type {
   AdminOverview,
@@ -69,6 +70,17 @@ function StaffHome() {
   if (query) params.set("q", query);
   const list = useFetch<ReportListResponse>(`/api/reports?${params.toString()}`);
   const categoryList = useFetch<{ categories: Category[] }>("/api/categories");
+  const impact = useFetch<{
+    range: { days: number; from: string; through: string };
+    source: string;
+    reportsReceived: number;
+    openReports: number;
+    completedReports: number;
+    medianHoursToFirstReview: number | null;
+    medianAgeDaysOfOpenReports: number | null;
+    possibleRepeatCategoryLocationGroups: number;
+    stillHappeningConfirmations: number;
+  }>("/api/reports/impact?days=30");
 
   const categories = categoryList.data?.categories ?? [];
   const reports = list.data?.reports ?? [];
@@ -86,6 +98,32 @@ function StaffHome() {
           </p>
         </div>
       </div>
+
+      <section className="card impact-panel" aria-labelledby="service-activity-title">
+        <h2 id="service-activity-title">Service activity</h2>
+        {impact.error ? (
+          <div className="error" role="alert">
+            <span>{impact.error}</span>
+            <button className="button" type="button" onClick={impact.reload}>Try again</button>
+          </div>
+        ) : impact.loading || !impact.data ? (
+          <p className="muted" role="status">Loading report measures…</p>
+        ) : (
+          <>
+            <p className="muted">Reports received {formatDate(impact.data.range.from)}–{formatDate(impact.data.range.through)} ({impact.data.range.days} days). Open and completed are current totals for this organization.</p>
+            <div className="stat-grid impact-grid">
+              <Metric label="Reports received" value={impact.data.reportsReceived} />
+              <Metric label="Open reports" value={impact.data.openReports} />
+              <Metric label="Completed reports" value={impact.data.completedReports} />
+              <Metric label="Median time to first review" value={impact.data.medianHoursToFirstReview === null ? "—" : `${impact.data.medianHoursToFirstReview} h`} />
+              <Metric label="Median age of open reports" value={impact.data.medianAgeDaysOfOpenReports === null ? "—" : `${impact.data.medianAgeDaysOfOpenReports} days`} />
+              <Metric label="Still happening confirmations" value={impact.data.stillHappeningConfirmations} />
+              <Metric label="Possible repeat category/location groups" value={impact.data.possibleRepeatCategoryLocationGroups} />
+            </div>
+            <p className="impact-source">Source: {impact.data.source} “Possible repeat” means the same selected category and normalized location text; it is not a verified duplicate. Submitted reports and status measures are not independently verified damage or completed work.</p>
+          </>
+        )}
+      </section>
 
       <form
         className="filters"
@@ -162,6 +200,10 @@ function StaffHome() {
       )}
     </section>
   );
+}
+
+function Metric({ label, value }: { label: string; value: number | string }) {
+  return <div className="stat-card"><span className="stat-value">{value}</span><span className="stat-label">{label}</span></div>;
 }
 
 function AdminHome() {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
@@ -60,8 +60,23 @@ const EVENT_TYPES: Record<string, string> = {
   REPORT_STATUS_CHANGED: "status",
   REPORT_UPDATE_ADDED: "update",
   REPORT_CLAIMED: "assignment",
+  REPORT_HANDED_OFF: "assignment",
   REPORT_MODERATED: "moderation",
 };
+
+function hashGuestToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  const value = sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+  return Math.round(value * 10) / 10;
+}
 
 type ReportRow = {
   id: string;
@@ -79,8 +94,8 @@ type ReportRow = {
   organization_id: string;
   organization_name: string;
   organization_kind: OrganizationKind;
-  reporter_user_id: string;
-  reporter_display_name: string;
+  reporter_user_id: string | null;
+  reporter_display_name: string | null;
   assigned_user_id: string | null;
   assigned_display_name: string | null;
   assigned_role: UserRole | null;
@@ -100,13 +115,13 @@ const REPORT_SELECT = `
   FROM reports
   JOIN categories ON categories.id = reports.category_id
   JOIN organizations ON organizations.id = reports.organization_id
-  JOIN users AS reporter ON reporter.id = reports.reporter_user_id
+  LEFT JOIN users AS reporter ON reporter.id = reports.reporter_user_id
   LEFT JOIN users AS assignee ON assignee.id = reports.assigned_user_id`;
 
 const createReportSchema = z.object({
   categoryId: z.string().trim().min(1),
-  title: z.string().trim().min(4).max(140),
-  description: z.string().trim().min(10).max(4000),
+  title: z.string().trim().max(140).optional().default(""),
+  description: z.string().trim().max(4000).optional().default(""),
   location: z.string().trim().min(3).max(300),
 });
 
@@ -117,8 +132,17 @@ const listQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
 });
 
+const impactQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).optional().default(30),
+});
+
 const updateSchema = z.object({
   message: z.string().trim().min(1).max(4000),
+});
+
+const handoffSchema = z.object({
+  toUserId: z.string().trim().min(1),
+  reason: z.string().trim().min(3).max(500),
 });
 
 const statusSchema = z.object({
@@ -194,7 +218,9 @@ function serializeSummary(row: ReportRow) {
       name: row.organization_name,
       kind: row.organization_kind,
     },
-    reporter: { id: row.reporter_user_id, displayName: row.reporter_display_name },
+    reporter: row.reporter_user_id
+      ? { id: row.reporter_user_id, displayName: row.reporter_display_name ?? "Resident" }
+      : { id: null, displayName: "Guest resident" },
     assignedTo: row.assigned_user_id
       ? {
           id: row.assigned_user_id,
@@ -308,6 +334,7 @@ async function serializeDetail(
     canClaim: staffScope && row.assigned_user_id === null,
     capabilities: {
       canClaim: staffScope && row.assigned_user_id === null,
+      canHandoff: staffScope && row.assigned_user_id === user.id,
       canUpdateStatus: staffScope,
       canAddUpdate: staffScope,
       canModerate: user.role === "ADMIN",
@@ -363,6 +390,13 @@ export function createReportsRouter(deps: {
     legacyHeaders: false,
     message: { error: { code: "RATE_LIMITED", message: "Too many reports were submitted from this connection. Wait before sending another report." } },
   });
+  const residentConfirmationLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "You have sent several follow-up confirmations. Try again later." } },
+  });
 
   // Photos are buffered and handed to the photo store only once accepted, so
   // nothing is written for requests rejected by the file filter or size limit.
@@ -383,6 +417,184 @@ export function createReportsRouter(deps: {
       callback(null, true);
     },
   });
+
+  async function submitReport(
+    request: import("express").Request,
+    reporterUserId: string | null,
+    guestToken?: string,
+  ): Promise<{ report: Awaited<ReturnType<typeof serializeDetail>>; guestAccessToken?: string }> {
+    const input = createReportSchema.parse(request.body);
+    const category = (await database
+      .prepare(
+        `SELECT categories.id, categories.name, categories.organization_id
+         FROM categories
+         JOIN organizations ON organizations.id = categories.organization_id
+         WHERE categories.id = ? AND categories.active = 1 AND organizations.active = 1`,
+      )
+      .get(input.categoryId)) as
+      | { id: string; name: string; organization_id: string }
+      | undefined;
+    if (!category) {
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "The request contains invalid fields.",
+        { categoryId: ["Choose a category routed to an active organization."] },
+      );
+    }
+
+    const title = input.title || `${category.name} issue`;
+    const description = input.description;
+    const location = input.location;
+    const now = Date.now();
+    const reportId = randomUUID();
+    const file = request.file;
+    const fileContentType = file ? actualImageType(file.buffer) : null;
+    if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
+      throw new ApiError(
+        415,
+        "INVALID_IMAGE_CONTENT",
+        "The file contents do not match a supported image type.",
+      );
+    }
+    const storedPhoto = file
+      ? await photos.save(file.buffer, file.originalname, fileContentType!)
+      : null;
+
+    await database.transaction(async () => {
+      const referenceCode = await nextReferenceCode(database);
+      await database
+        .prepare(
+          `INSERT INTO reports
+            (id, reference_code, title, description, location, category_id,
+             organization_id, reporter_user_id, assigned_user_id, status,
+             moderation_status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?)`,
+        )
+        .run(
+          reportId,
+          referenceCode,
+          title,
+          description,
+          location,
+          category.id,
+          category.organization_id,
+          reporterUserId,
+          now,
+          now,
+        );
+
+      if (guestToken) {
+        await database
+          .prepare(
+            `INSERT INTO guest_report_access (report_id, token_hash, created_at, expires_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(reportId, hashGuestToken(guestToken), now, now + 90 * 24 * 60 * 60 * 1000);
+      }
+
+      await recordReportEvent(database, {
+        reportId,
+        actorUserId: reporterUserId,
+        action: "REPORT_CREATED",
+        toStatus: "SUBMITTED",
+        message: title,
+      });
+
+      if (file && storedPhoto) {
+        await database
+          .prepare(
+            `INSERT INTO attachments
+              (id, report_id, filename, stored_name, content_type, size_bytes, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            randomUUID(),
+            reportId,
+            file.originalname,
+            storedPhoto.storedName,
+            fileContentType!,
+            file.size,
+            now,
+          );
+      }
+
+      await notifyOrganization(database, category.organization_id, {
+        reportId,
+        type: "REPORT_SUBMITTED",
+        title: `New report: ${title}`,
+        message: `${referenceCode} was submitted to ${category.name} and needs review.`,
+      });
+    }, async () => {
+      if (storedPhoto) {
+        try {
+          await photos.remove(storedPhoto.storedName);
+        } catch {
+          console.error("Photo cleanup failed after report persistence rolled back.");
+        }
+      }
+    });
+
+    const row = await loadReport(database, reportId);
+    const viewer = { id: reporterUserId ?? "", role: "RESIDENT" as const, organizationId: null };
+    return {
+      report: await serializeDetail(database, row, viewer),
+      ...(guestToken ? { guestAccessToken: guestToken } : {}),
+    };
+  }
+
+  async function assertGuestAccess(reportId: string, token: string): Promise<void> {
+    const grant = (await database
+      .prepare("SELECT token_hash, expires_at FROM guest_report_access WHERE report_id = ?")
+      .get(reportId)) as { token_hash: string; expires_at: number } | undefined;
+    if (!grant || grant.expires_at < Date.now() || !/^[A-Za-z0-9_-]{40,60}$/.test(token)) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report link is invalid or has expired.");
+    }
+    const presented = Buffer.from(hashGuestToken(token), "hex");
+    const stored = Buffer.from(grant.token_hash, "hex");
+    if (presented.length !== stored.length || !timingSafeEqual(presented, stored)) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report link is invalid or has expired.");
+    }
+  }
+
+  async function recordStillHappening(row: ReportRow, actorUserId: string | null) {
+    const nextStatus = row.status === "RESOLVED" || row.status === "CLOSED"
+      ? "UNDER_REVIEW"
+      : row.status;
+    const now = Date.now();
+    await database
+      .prepare("UPDATE reports SET status = ?, updated_at = ? WHERE id = ?")
+      .run(nextStatus, now, row.id);
+    await recordReportEvent(database, {
+      reportId: row.id,
+      actorUserId,
+      action: "REPORT_STILL_HAPPENING",
+      fromStatus: row.status === nextStatus ? null : row.status,
+      toStatus: row.status === nextStatus ? null : nextStatus,
+      message: row.status === nextStatus
+        ? "A resident confirmed this issue is still happening."
+        : "A resident says this issue is still happening. The report was returned for staff review.",
+    });
+    await recordAudit(database, {
+      actorUserId,
+      action: "REPORT_STILL_HAPPENING",
+      targetType: "REPORT",
+      targetId: row.id,
+      details: { referenceCode: row.reference_code, fromStatus: row.status, toStatus: nextStatus },
+    });
+    await notifyOrganization(database, row.organization_id, {
+      reportId: row.id,
+      type: "REPORT_STILL_HAPPENING",
+      title: `Resident follow-up: ${row.reference_code}`,
+      message: `A resident says “${row.title}” is still happening. Please review the report.`,
+    });
+    const refreshed = await loadReport(database, row.id);
+    return serializeDetail(database, refreshed, {
+      id: actorUserId ?? "",
+      role: "RESIDENT",
+      organizationId: null,
+    });
+  }
 
   router.get("/", authenticate(database), async (request, response) => {
     const user = currentUser(request);
@@ -448,6 +660,83 @@ export function createReportsRouter(deps: {
     });
   });
 
+  router.get("/impact", authenticate(database), requireStaff(), async (request, response) => {
+    const user = currentUser(request);
+    const { days } = impactQuerySchema.parse(request.query);
+    const now = Date.now();
+    const rangeStart = now - days * 24 * 60 * 60 * 1000;
+    const reports = (await database
+      .prepare(
+        `SELECT id, category_id, location, status, created_at
+         FROM reports
+         WHERE organization_id = ? AND moderation_status = 'VISIBLE'`,
+      )
+      .all(user.organizationId)) as Array<{
+        id: string;
+        category_id: string;
+        location: string;
+        status: ReportStatus;
+        created_at: number;
+      }>;
+    const recent = reports.filter((report) => report.created_at >= rangeStart);
+    const recentIds = new Set(recent.map((report) => report.id));
+    const eventRows = (await database
+      .prepare(
+        `SELECT report_events.report_id, report_events.action, report_events.to_status,
+                report_events.created_at
+         FROM report_events
+         JOIN reports ON reports.id = report_events.report_id
+         WHERE reports.organization_id = ? AND reports.moderation_status = 'VISIBLE'
+           AND report_events.created_at >= ?`,
+      )
+      .all(user.organizationId, rangeStart)) as Array<{
+        report_id: string;
+        action: string;
+        to_status: string | null;
+        created_at: number;
+      }>;
+    const firstReviews = new Map<string, number>();
+    for (const event of eventRows) {
+      if (event.action !== "REPORT_STATUS_CHANGED" || event.to_status !== "UNDER_REVIEW" || !recentIds.has(event.report_id)) continue;
+      const existing = firstReviews.get(event.report_id);
+      if (existing === undefined || event.created_at < existing) firstReviews.set(event.report_id, event.created_at);
+    }
+    const reviewHours = recent.flatMap((report) => {
+      const firstReview = firstReviews.get(report.id);
+      return firstReview === undefined ? [] : [(firstReview - report.created_at) / (60 * 60 * 1000)];
+    });
+    const openReports = reports.filter((report) => report.status !== "RESOLVED" && report.status !== "CLOSED");
+    const repeatGroups = new Map<string, number>();
+    for (const report of recent) {
+      const normalizedLocation = report.location.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+      if (!normalizedLocation) continue;
+      const key = `${report.category_id}\u0000${normalizedLocation}`;
+      repeatGroups.set(key, (repeatGroups.get(key) ?? 0) + 1);
+    }
+    response.json({
+      range: { days, from: new Date(rangeStart).toISOString(), through: new Date(now).toISOString() },
+      source: "Visible CivicSignal report and report-event records for this organization.",
+      reportsReceived: recent.length,
+      openReports: openReports.length,
+      completedReports: reports.length - openReports.length,
+      medianHoursToFirstReview: median(reviewHours),
+      medianAgeDaysOfOpenReports: median(openReports.map((report) => (now - report.created_at) / (24 * 60 * 60 * 1000))),
+      possibleRepeatCategoryLocationGroups: [...repeatGroups.values()].filter((count) => count > 1).length,
+      stillHappeningConfirmations: eventRows.filter((event) => event.action === "REPORT_STILL_HAPPENING").length,
+    });
+  });
+
+  router.post(
+    "/guest",
+    reportCreationLimiter,
+    upload.single("photo"),
+    async (request, response) => {
+      const guestAccessToken = randomBytes(32).toString("base64url");
+      const result = await submitReport(request, null, guestAccessToken);
+      response.status(201).json({ ...result.report, guestAccessToken: result.guestAccessToken });
+    },
+  );
+
   router.post(
     "/",
     authenticate(database),
@@ -456,119 +745,70 @@ export function createReportsRouter(deps: {
     upload.single("photo"),
     async (request, response) => {
       const user = currentUser(request);
-      const input = createReportSchema.parse(request.body);
-
-      const category = (await database
-        .prepare(
-          `SELECT categories.id, categories.name, categories.organization_id
-           FROM categories
-           JOIN organizations ON organizations.id = categories.organization_id
-           WHERE categories.id = ? AND categories.active = 1 AND organizations.active = 1`,
-        )
-        .get(input.categoryId)) as
-        | { id: string; name: string; organization_id: string }
-        | undefined;
-      if (!category) {
-        throw new ApiError(
-          422,
-          "VALIDATION_ERROR",
-          "The request contains invalid fields.",
-          { categoryId: ["Choose a category routed to an active organization."] },
-        );
-      }
-
-      const now = Date.now();
-      const reportId = randomUUID();
-
-      const file = request.file;
-      const fileContentType = file ? actualImageType(file.buffer) : null;
-      if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
-        throw new ApiError(
-          415,
-          "INVALID_IMAGE_CONTENT",
-          "The file contents do not match a supported image type.",
-        );
-      }
-      const storedPhoto = file
-        ? await photos.save(file.buffer, file.originalname, fileContentType!)
-        : null;
-
-      await database.transaction(async () => {
-        const referenceCode = await nextReferenceCode(database);
-        await database
-          .prepare(
-            `INSERT INTO reports
-              (id, reference_code, title, description, location, category_id,
-               organization_id, reporter_user_id, assigned_user_id, status,
-               moderation_status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?)`,
-          )
-          .run(
-            reportId,
-            referenceCode,
-            input.title,
-            input.description,
-            input.location,
-            category.id,
-            category.organization_id,
-            user.id,
-            now,
-            now,
-          );
-
-        await recordReportEvent(database, {
-          reportId,
-          actorUserId: user.id,
-          action: "REPORT_CREATED",
-          toStatus: "SUBMITTED",
-          message: input.title,
-        });
-
-        if (file && storedPhoto) {
-          await database
-            .prepare(
-              `INSERT INTO attachments
-                (id, report_id, filename, stored_name, content_type, size_bytes, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              randomUUID(),
-              reportId,
-              file.originalname,
-              storedPhoto.storedName,
-              fileContentType!,
-              file.size,
-              now,
-            );
-        }
-
-        await notifyOrganization(database, category.organization_id, {
-          reportId,
-          type: "REPORT_SUBMITTED",
-          title: `New report: ${input.title}`,
-          message: `${referenceCode} was submitted to ${category.name} and needs review.`,
-        });
-      }, async () => {
-        if (storedPhoto) {
-          try {
-            await photos.remove(storedPhoto.storedName);
-          } catch {
-            // Do not mask the persistence failure or log private storage details.
-            console.error("Photo cleanup failed after report persistence rolled back.");
-          }
-        }
-      });
-
-      const row = await loadReport(database, reportId);
-      response.status(201).json(await serializeDetail(database, row, user));
+      const result = await submitReport(request, user.id);
+      response.status(201).json(result.report);
     },
   );
+
+  router.get("/:reportId/guest", async (request, response) => {
+    const reportId = pathId(request, "reportId");
+    await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
+    const row = await loadReport(database, reportId);
+    if (row.reporter_user_id !== null) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await serializeDetail(database, row, {
+      id: "",
+      role: "RESIDENT",
+      organizationId: null,
+    }));
+  });
+
+  router.post("/:reportId/guest/still-happening", residentConfirmationLimiter, async (request, response) => {
+    const reportId = pathId(request, "reportId");
+    await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
+    const row = await loadReport(database, reportId);
+    if (row.reporter_user_id !== null) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await recordStillHappening(row, null));
+  });
+
+  router.get("/:reportId/guest/attachments/:attachmentId", async (request, response) => {
+    const reportId = pathId(request, "reportId");
+    const attachmentId = pathId(request, "attachmentId");
+    await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
+    const attachment = (await database
+      .prepare("SELECT stored_name, content_type FROM attachments WHERE id = ? AND report_id = ?")
+      .get(attachmentId, reportId)) as { stored_name: string; content_type: string } | undefined;
+    if (!attachment) {
+      throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "This report attachment does not exist.");
+    }
+    const photo = await photos.read(attachment.stored_name);
+    response
+      .status(200)
+      .set("Content-Type", attachment.content_type)
+      .set("Content-Length", String(photo.byteLength))
+      .set("Content-Disposition", "inline")
+      .set("Cache-Control", "private, no-store")
+      .set("X-Content-Type-Options", "nosniff")
+      .send(photo);
+  });
 
   router.get("/:reportId", authenticate(database), async (request, response) => {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     assertCanView(row, user);
     response.json(await serializeDetail(database, row, user));
+  });
+
+  router.post("/:reportId/still-happening", authenticate(database), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
+    const user = currentUser(request);
+    const row = await loadReport(database, pathId(request, "reportId"));
+    if (row.reporter_user_id !== user.id) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await recordStillHappening(row, user.id));
   });
 
   router.get(
@@ -668,6 +908,104 @@ export function createReportsRouter(deps: {
       );
     },
   );
+
+  router.get("/:reportId/handoff-options", authenticate(database), requireStaff(), async (request, response) => {
+    const user = currentUser(request);
+    const row = await loadReport(database, pathId(request, "reportId"));
+    assertCanView(row, user);
+    assertCanManage(row, user);
+    response.json({
+      staff: await database
+        .prepare(
+          `SELECT id, display_name AS displayName, role
+           FROM users
+           WHERE organization_id = ? AND status = 'ACTIVE' AND verified_at IS NOT NULL
+             AND role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+           ORDER BY display_name`,
+        )
+        .all(row.organization_id),
+    });
+  });
+
+  router.post("/:reportId/handoff", authenticate(database), requireStaff(), async (request, response) => {
+    const user = currentUser(request);
+    const input = handoffSchema.parse(request.body);
+    const row = await loadReport(database, pathId(request, "reportId"));
+    assertCanView(row, user);
+    assertCanManage(row, user);
+    if (row.assigned_user_id !== user.id) {
+      throw new ApiError(409, "NOT_REPORT_OWNER", "Only the staff member currently handling this report can hand it off.");
+    }
+    if (input.toUserId === user.id) {
+      throw new ApiError(422, "INVALID_HANDOFF", "Choose another verified staff member in your organization.");
+    }
+    const recipient = (await database
+      .prepare(
+        `SELECT id, display_name FROM users
+         WHERE id = ? AND organization_id = ? AND status = 'ACTIVE'
+           AND verified_at IS NOT NULL AND role IN ('OFFICIAL', 'LAW_ENFORCEMENT')`,
+      )
+      .get(input.toUserId, row.organization_id)) as { id: string; display_name: string } | undefined;
+    if (!recipient) {
+      throw new ApiError(422, "INVALID_HANDOFF", "Choose an active, verified staff member in your organization.");
+    }
+
+    const now = Date.now();
+    await database.transaction(async () => {
+      const stillVerified = await database.prepare(
+        `SELECT id FROM users
+         WHERE id = ? AND organization_id = ? AND status = 'ACTIVE'
+           AND verified_at IS NOT NULL AND role IN ('OFFICIAL', 'LAW_ENFORCEMENT')`,
+      ).get(recipient.id, row.organization_id) as { id: string } | undefined;
+      if (!stillVerified) {
+        throw new ApiError(409, "STAFF_UNAVAILABLE", "That staff account is no longer active for this organization.");
+      }
+      const transferred = await database.prepare(
+        `UPDATE reports SET assigned_user_id = ?, updated_at = ?
+         WHERE id = ? AND assigned_user_id = ? RETURNING id`,
+      ).get(recipient.id, now, row.id, user.id) as { id: string } | undefined;
+      if (!transferred) {
+        throw new ApiError(409, "REPORT_OWNERSHIP_CHANGED", "Another staff member changed ownership. Reload the report and try again.");
+      }
+      await recordReportEvent(database, {
+        reportId: row.id,
+        actorUserId: user.id,
+        action: "REPORT_HANDED_OFF",
+        message: input.reason,
+      });
+      const residentMessage = "The staff member handling your report has changed. The receiving organization remains the same.";
+      await database.prepare(
+        `INSERT INTO report_updates (id, report_id, author_user_id, message, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(randomUUID(), row.id, user.id, residentMessage, now);
+      await recordReportEvent(database, {
+        reportId: row.id,
+        actorUserId: user.id,
+        action: "REPORT_UPDATE_ADDED",
+        message: residentMessage,
+      });
+      await notifyReporterOfReport(
+        database,
+        row,
+        "REPORT_REASSIGNED",
+        `A new staff member is handling ${row.reference_code}`,
+        residentMessage,
+      );
+      await recordAudit(database, {
+        actorUserId: user.id,
+        action: "REPORT_HANDED_OFF",
+        targetType: "REPORT",
+        targetId: row.id,
+        details: {
+          referenceCode: row.reference_code,
+          fromUserId: user.id,
+          toUserId: recipient.id,
+          reason: input.reason,
+        },
+      });
+    });
+    response.json(await serializeDetail(database, await loadReport(database, row.id), user));
+  });
 
   router.post(
     "/:reportId/status",

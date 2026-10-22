@@ -98,8 +98,9 @@ export function Layout() {
             </nav>
           ) : (
             <nav className="topnav" aria-label="Main navigation">
+              <NavLink className="button primary topbar-cta" to="/reports/new">Report an issue</NavLink>
               <NavLink to="/signin">Sign in</NavLink>
-              <NavLink className="button primary topbar-cta" to={setupRequired ? "/setup" : "/signup"}>Get started</NavLink>
+              {setupRequired && <NavLink to="/setup">Community setup</NavLink>}
             </nav>
           )}
         </div>

@@ -70,7 +70,7 @@ const POSTGRES_SCHEMA = `
       location TEXT NOT NULL,
       category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
-      reporter_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
       moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
@@ -84,6 +84,13 @@ const POSTGRES_SCHEMA = `
       ON reports(organization_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS reports_assigned_user_idx
       ON reports(assigned_user_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS guest_report_access (
+      report_id TEXT PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS report_events (
       id TEXT PRIMARY KEY,
@@ -190,7 +197,7 @@ const DATA_API_PROTECTION = `
   BEGIN
     FOREACH table_name IN ARRAY ARRAY[
       'settings', 'organizations', 'users', 'sessions', 'categories', 'reports',
-      'report_events', 'report_updates', 'attachments', 'notifications', 'audit_events'
+      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'notifications', 'audit_events'
     ] LOOP
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
       EXECUTE format('REVOKE ALL ON TABLE %I FROM PUBLIC', table_name);
@@ -222,6 +229,7 @@ export async function createPostgresDatabase(connectionString: string): Promise<
     // Concurrent cold starts must not race CREATE TABLE or schema hardening.
     await initializationClient.query("SELECT pg_advisory_xact_lock(1962042917)");
     await initializationClient.query(POSTGRES_SCHEMA);
+    await initializationClient.query("ALTER TABLE reports ALTER COLUMN reporter_user_id DROP NOT NULL");
     await initializationClient.query(DATA_API_PROTECTION);
     await initializationClient.query("COMMIT");
   } catch (error) {

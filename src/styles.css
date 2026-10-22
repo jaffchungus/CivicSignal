@@ -466,6 +466,143 @@ p {
   text-align: center;
 }
 
+.landing-signin {
+  margin-top: 0.8rem;
+}
+
+.install-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.install-help {
+  max-width: 42ch;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.report-composer {
+  width: min(100%, 780px);
+  margin: 1rem auto;
+  padding: clamp(1.1rem, 4vw, 2rem);
+}
+
+.step-indicator {
+  display: inline-flex;
+  min-width: 4.1rem;
+  min-height: 2.4rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  background: var(--forest-100);
+  color: var(--forest-950);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.report-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.location-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfcfa;
+}
+
+.location-action .button {
+  margin-top: 0.4rem;
+}
+
+.details-fields {
+  margin-top: 0.85rem;
+}
+
+.report-confirmation {
+  margin: 0.25rem 0;
+}
+
+.report-photo-preview {
+  display: block;
+  width: min(100%, 220px);
+  max-height: 180px;
+  margin-bottom: 0.35rem;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.privacy-summary {
+  padding: 0.9rem 1rem;
+  border-left: 3px solid var(--forest-700);
+  background: #f1f6f2;
+}
+
+.resident-follow-up {
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.resident-follow-up h2 {
+  margin-top: 0;
+}
+
+.impact-panel > h2 {
+  margin-top: 0;
+}
+
+.impact-panel .impact-grid {
+  margin: 0.8rem 0;
+}
+
+.impact-source {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.secure-link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin: 0.9rem 0;
+  padding: 1rem;
+  border: 1px solid #9dbdad;
+  border-radius: var(--radius);
+  background: #eaf3ee;
+}
+
+.secure-link-card .field {
+  min-width: 0;
+}
+
+.secure-link-card .input {
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.secure-link-card > .button {
+  align-self: flex-start;
+}
+
+details > summary {
+  min-height: 44px;
+  padding: 0.5rem 0;
+  color: var(--forest-700);
+  cursor: pointer;
+  font-weight: 650;
+}
+
 .legal-page {
   max-width: 820px;
   margin: 0 auto;
@@ -1269,6 +1406,10 @@ input[type="file"].input {
     max-width: 17ch;
   }
 
+  .report-action-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .topbar-inner {
     width: calc(100% - 2rem);
     min-height: auto;
@@ -1358,6 +1499,15 @@ input[type="file"].input {
 
   .landing-actions .button {
     width: 100%;
+  }
+
+  .install-action {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .step-indicator {
+    align-self: flex-start;
   }
 
   .content {

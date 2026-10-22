@@ -136,7 +136,7 @@ export type Report = {
   status: ReportStatus;
   category: Category;
   organization?: Organization | null;
-  reporter?: { id: string; displayName: string } | null;
+  reporter?: { id?: string | null; displayName: string } | null;
   assignedTo?: { id: string; displayName: string; role?: UserRole } | null;
   submittedAt: string;
   updatedAt: string;

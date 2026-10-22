@@ -70,7 +70,7 @@ const SQLITE_SCHEMA = `
       location TEXT NOT NULL,
       category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
-      reporter_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
       moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
@@ -84,6 +84,13 @@ const SQLITE_SCHEMA = `
       ON reports(organization_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS reports_assigned_user_idx
       ON reports(assigned_user_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS guest_report_access (
+      report_id TEXT PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS report_events (
       id TEXT PRIMARY KEY,
@@ -183,6 +190,39 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
     database.pragma("foreign_keys = ON");
     await retryBusy(() => database.pragma("journal_mode = WAL"));
     await retryBusy(() => database.exec(SQLITE_SCHEMA));
+    const reporterColumn = (database.pragma("table_info(reports)") as Array<{
+      name: string;
+      notnull: number;
+    }>).find((column) => column.name === "reporter_user_id");
+    if (reporterColumn?.notnull) {
+      database.pragma("foreign_keys = OFF");
+      database.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE reports_guest_migration (
+          id TEXT PRIMARY KEY,
+          reference_code TEXT NOT NULL UNIQUE,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL,
+          location TEXT NOT NULL,
+          category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+          reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+          assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
+          moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO reports_guest_migration SELECT * FROM reports;
+        DROP TABLE reports;
+        ALTER TABLE reports_guest_migration RENAME TO reports;
+        CREATE INDEX reports_reporter_idx ON reports(reporter_user_id, created_at DESC);
+        CREATE INDEX reports_organization_status_idx ON reports(organization_id, status, created_at DESC);
+        CREATE INDEX reports_assigned_user_idx ON reports(assigned_user_id, created_at DESC);
+        COMMIT;
+      `);
+      database.pragma("foreign_keys = ON");
+    }
   } catch (error) {
     database.close();
     throw error;
