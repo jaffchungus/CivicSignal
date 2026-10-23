@@ -36,6 +36,7 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `DATABASE_PATH` | SQLite file for local development (default `./data/civicsignal.db`). |
 | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
 | `SESSION_TTL_DAYS` | Local session expiry in days (local entry defaults to 14). |
+| `GEMINI_API_KEY` | Optional server-only Google Gemini API key for photo analysis. Add it to Vercel's environment settings to enable AI suggestions; never use a `VITE_` or `NEXT_PUBLIC_` prefix. |
 | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |
 | `DB_PASSWORD` | Alternative for the configured Supabase database host; the server builds a TLS-enabled Postgres URL. |
 | `PHOTO_STORAGE` | Production provider: `supabase` or `blob`. With no explicit choice, a configured Supabase secret selects Supabase; otherwise Blob is used. |

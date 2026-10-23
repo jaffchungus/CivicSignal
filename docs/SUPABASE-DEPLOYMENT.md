@@ -24,13 +24,17 @@ Set these in Vercel's environment settings (not source control):
 - `PHOTO_STORAGE=supabase`.
 - `SUPABASE_PHOTO_BUCKET=civicsignal-photos` (default).
 
-Create that bucket in the Supabase Dashboard as **private**, allow JPEG/PNG/WebP/GIF, and set its upload limit to 5 MiB or lower. Public buckets are rejected by the application. Do not add public read/write Storage policies for this bucket: CivicSignal users are authorized by Express, not Supabase JWTs. The API also checks the actual file signature against the submitted MIME type before saving an image.
+Create that bucket in the Supabase Dashboard as **private**, allow JPEG/PNG/WebP/GIF, and set its upload limit to 4 MiB or lower. Public buckets are rejected by the application. Do not add public read/write Storage policies for this bucket: CivicSignal users are authorized by Express, not Supabase JWTs. The API also checks the actual file signature against the submitted MIME type before saving an image.
 
 On startup the existing schema is created if absent, with transaction-scoped advisory locking across cold starts. Row-level security is enabled for CivicSignal's existing tables and table grants are revoked from `PUBLIC`, `anon`, and `authenticated`. No permissive Data API policies are added. The trusted SQL connection must own these tables or otherwise have the necessary DDL privileges and bypass RLS. These startup operations modify the target database; obtain deployment approval and back up existing data before pointing at a populated project. Do not apply to unrelated tables or replace the existing data.
 
 Vercel uses `api/index.ts` and the existing `vercel.json`: static output `dist/client`, API rewrite to Express, and SPA fallback. Initialization failures can be retried by a subsequent request rather than permanently poisoning the warm instance.
 
-Vercel's request-body limit is smaller than the local 5 MiB upload limit; production uploads must fit within the platform's total multipart request limit. Other existing production limitations, including per-instance rate limiting and concurrency-sensitive workflow mutations, are not solved by this integration.
+### Optional AI photo analysis
+
+To enable photo suggestions, set `GEMINI_API_KEY` in the Vercel environment settings for each environment where the feature should run, then redeploy. This key is read only by the server; do not prefix it with `VITE_` or `NEXT_PUBLIC_`. Gemini 3.8 Flash has a free API tier, subject to Google's project-specific rate limits. The free tier may use submitted images to improve Google products, so the upload form and privacy notice disclose this. Without the key, readiness marks AI analysis unavailable and reports can still be completed manually.
+
+The shared 4 MiB image limit leaves room for multipart framing under Vercel Functions' 4.5 MB request-body limit. The API function allows up to 60 seconds on Vercel Hobby; AI provider requests still time out after 10 seconds. Other existing production limitations, including per-instance rate limiting and concurrency-sensitive workflow mutations, are not solved by this integration.
 
 ## Report reference allocation and rollback cleanup
 

@@ -1,6 +1,10 @@
 // CivicSignal API contract — the single owner of domain vocabulary and wire
 // shapes, shared by the server and the client.
 
+// Keep image uploads below Vercel Functions' 4.5 MB request-body limit,
+// including multipart framing overhead.
+export const MAX_REPORT_PHOTO_BYTES = 4 * 1024 * 1024;
+
 export const USER_ROLES = [
   "RESIDENT",
   "OFFICIAL",
@@ -147,6 +151,24 @@ export type Report = {
   allowedTransitions?: ReportStatus[];
   canClaim?: boolean;
   capabilities?: Record<string, boolean>;
+  nearestRepresentative?: {
+    id: string;
+    displayName: string;
+    role: UserRole;
+    organizationName?: string;
+    municipalityName?: string;
+  } | null;
+};
+
+export type PhotoAnalysisResult = {
+  problem: string;
+  detectedIssueType: string;
+  suggestedCategoryName: string;
+  suggestedTitle: string;
+  suggestedDescription: string;
+  confidence: number;
+  detectedCues: string[];
+  aiModel: string;
 };
 
 export type Notification = {

@@ -12,6 +12,7 @@ import {
   REPORT_STATUSES,
   REPORT_TRANSITIONS,
   type ModerationStatus,
+  MAX_REPORT_PHOTO_BYTES,
   type OrganizationKind,
   type ReportStatus,
   type UserRole,
@@ -24,10 +25,11 @@ import {
   recordReportEvent,
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
+import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
+import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
 import type { PhotoStore } from "../photo-store.js";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
 
-const ATTACHMENT_LIMIT_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -294,6 +296,12 @@ async function serializeDetail(
   const staffScope =
     isStaffRole(user.role) && row.organization_id === user.organizationId;
 
+  const nearestRep = await resolveMunicipalityRepresentative(
+    database,
+    row.organization_id,
+    row.location,
+  );
+
   return {
     ...serializeSummary(row),
     attachments: attachments.map((attachment) => ({
@@ -339,6 +347,15 @@ async function serializeDetail(
       canAddUpdate: staffScope,
       canModerate: user.role === "ADMIN",
     },
+    nearestRepresentative: nearestRep
+      ? {
+          id: nearestRep.id,
+          displayName: nearestRep.displayName,
+          role: nearestRep.role,
+          organizationName: nearestRep.organizationName,
+          municipalityName: nearestRep.municipalityName,
+        }
+      : null,
   };
 }
 
@@ -390,6 +407,13 @@ export function createReportsRouter(deps: {
     legacyHeaders: false,
     message: { error: { code: "RATE_LIMITED", message: "Too many reports were submitted from this connection. Wait before sending another report." } },
   });
+  const photoAnalysisLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many photos were sent for analysis from this connection. Try again later." } },
+  });
   const residentConfirmationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     limit: 5,
@@ -402,7 +426,7 @@ export function createReportsRouter(deps: {
   // nothing is written for requests rejected by the file filter or size limit.
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: ATTACHMENT_LIMIT_BYTES, files: 1 },
+    limits: { fileSize: MAX_REPORT_PHOTO_BYTES, files: 1 },
     fileFilter: (_request, file, callback) => {
       if (!ALLOWED_IMAGE_TYPES.has(file.mimetype.toLowerCase())) {
         callback(
@@ -449,17 +473,23 @@ export function createReportsRouter(deps: {
     const now = Date.now();
     const reportId = randomUUID();
     const file = request.file;
-    const fileContentType = file ? actualImageType(file.buffer) : null;
-    if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
+    if (!file) {
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "A photo of the issue is required.",
+        { photo: ["A photo of the issue is required."] },
+      );
+    }
+    const fileContentType = actualImageType(file.buffer);
+    if (!fileContentType || fileContentType !== file.mimetype.toLowerCase()) {
       throw new ApiError(
         415,
         "INVALID_IMAGE_CONTENT",
         "The file contents do not match a supported image type.",
       );
     }
-    const storedPhoto = file
-      ? await photos.save(file.buffer, file.originalname, fileContentType!)
-      : null;
+    const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
 
     await database.transaction(async () => {
       const referenceCode = await nextReferenceCode(database);
@@ -725,6 +755,44 @@ export function createReportsRouter(deps: {
       stillHappeningConfirmations: eventRows.filter((event) => event.action === "REPORT_STILL_HAPPENING").length,
     });
   });
+
+  router.post(
+    "/analyze-photo",
+    photoAnalysisLimiter,
+    upload.single("photo"),
+    async (request, response) => {
+      const file = request.file;
+      if (!file) {
+        throw new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          "A photo of the issue is required for AI problem detection.",
+          { photo: ["Please upload or take a photo to analyze."] },
+        );
+      }
+      const fileContentType = actualImageType(file.buffer);
+      if (!fileContentType || fileContentType !== file.mimetype.toLowerCase()) {
+        throw new ApiError(
+          415,
+          "INVALID_IMAGE_CONTENT",
+          "The file contents do not match a supported image type.",
+        );
+      }
+      const categories = (await database
+        .prepare(`SELECT categories.name
+                  FROM categories
+                  JOIN organizations ON organizations.id = categories.organization_id
+                  WHERE categories.active = 1 AND organizations.active = 1
+                  ORDER BY categories.name`)
+        .all()) as Array<{ name: string }>;
+      const analysis = await detectProblemInPhoto(
+        file.buffer,
+        fileContentType,
+        categories.map((category) => category.name),
+      );
+      response.json({ analysis });
+    },
+  );
 
   router.post(
     "/guest",

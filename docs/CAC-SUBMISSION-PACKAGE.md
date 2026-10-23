@@ -100,7 +100,7 @@ The report detail and attachment endpoints authenticate each request and call th
 The shared contract defines allowed transitions. The server checks the current state before updating the report and writes the transition event, notification, and audit record. The client only displays actions the API says are available; the server remains the authorization boundary.
 
 **How are uploaded photos protected?**  
-Uploads are limited to one file of at most 5 MiB, accepted MIME types are checked against file signatures, and the API serves attachments only after report authorization. Supabase buckets are rejected if public. New Vercel Blob uploads request private access and are fetched through the SDK. Legacy public Blob objects may need a separate storage migration.
+Uploads are limited to one file of at most 4 MiB, accepted MIME types are checked against file signatures, and the API serves attachments only after report authorization. Supabase buckets are rejected if public. New Vercel Blob uploads request private access and are fetched through the SDK. Legacy public Blob objects may need a separate storage migration.
 
 **What happens if the storage service is down?**  
 The production app can start without the optional photo service; a photo submission then returns a sanitized service-unavailable error. Account and report APIs do not claim the upload succeeded.
@@ -114,8 +114,8 @@ The API tests create temporary SQLite databases and synthetic accounts in a temp
 **What are the current limitations?**  
 The app has no verified municipal integration, no public aggregate statistics, no service-level response-time guarantee, and no published operator/support contact or retention schedule. Production photo bucket access and a full authenticated production workflow have not been verified in this workspace. Vercel rate limits are per function instance, not a globally coordinated abuse-control system.
 
-**Why did you not add AI or public statistics?**  
-The product's differentiator is the auditable, resident-visible history. A public dashboard would require explicit privacy thresholds and real eligible data; fake counts would be misleading. No external-data integration is claimed.
+**What does the app use AI for?**
+When the deployment operator configures `GEMINI_API_KEY`, Google Gemini analyzes a selected issue photo and suggests a description and configured category. Residents can edit the result; it does not automatically route or submit a report. Public statistics remain disabled because they would require explicit privacy thresholds and eligible data; no external-data integration is claimed.
 
 ## Scorecard · evidence and remaining gaps
 

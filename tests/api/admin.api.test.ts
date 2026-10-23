@@ -56,12 +56,16 @@ describe("administrator controls", () => {
     const roads = categoryList.categories.find(
       (category: { name: string }) => category.name === "Roads and Sidewalks",
     );
-    const created = await residentAgent.post("/api/reports").send({
-      categoryId: roads.id,
-      title: "Suspicious spam report about sidewalks",
-      description: "This report contains obvious spam content for moderation.",
-      location: "Nowhere Street 1",
-    });
+    const created = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Suspicious spam report about sidewalks")
+      .field("description", "This report contains obvious spam content for moderation.")
+      .field("location", "Nowhere Street 1")
+      .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
+        filename: "report.png",
+        contentType: "image/png",
+      });
     expect(created.status).toBe(201);
     const reportId = created.body.id as string;
 

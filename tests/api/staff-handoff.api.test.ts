@@ -46,12 +46,17 @@ describe("verified staff report handoff", () => {
     }).expect(201);
     const { body: catalog } = await request(app).get("/api/categories").expect(200);
     const category = catalog.categories.find((item: { name: string }) => item.name === "Roads and Sidewalks");
-    const report = await resident.post("/api/reports").send({
-      categoryId: category.id,
-      location: "Main Street",
-      title: "Road surface damage",
-      description: "The road surface is broken near the intersection.",
-    }).expect(201);
+    const report = await resident
+      .post("/api/reports")
+      .field("categoryId", category.id)
+      .field("location", "Main Street")
+      .field("title", "Road surface damage")
+      .field("description", "The road surface is broken near the intersection.")
+      .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
+        filename: "damage.png",
+        contentType: "image/png",
+      })
+      .expect(201);
 
     await original.agent.post(`/api/reports/${report.body.id}/claim`).expect(200);
     await original.agent.post(`/api/reports/${report.body.id}/handoff`)

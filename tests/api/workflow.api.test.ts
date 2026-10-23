@@ -83,12 +83,16 @@ describe("civic report workflow", () => {
       (category: { name: string }) => category.name === "Roads and Sidewalks",
     );
 
-    const created = await residentAgent.post("/api/reports").send({
-      categoryId: roads.id,
-      title: "Deep pothole on Main Street",
-      description: "A deep pothole near the crosswalk is a hazard for cyclists.",
-      location: "Main Street and 4th Avenue",
-    });
+    const created = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Deep pothole on Main Street")
+      .field("description", "A deep pothole near the crosswalk is a hazard for cyclists.")
+      .field("location", "Main Street and 4th Avenue")
+      .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
+        filename: "pothole.png",
+        contentType: "image/png",
+      });
     expect(created.status).toBe(201);
     const reportId = created.body.id as string;
     expect(created.body).toMatchObject({
@@ -343,19 +347,27 @@ describe("civic report workflow", () => {
       (category: { name: string }) => category.name === "Roads and Sidewalks",
     );
 
-    const safetyReport = await residentAgent.post("/api/reports").send({
-      categoryId: safety.id,
-      title: "Late night noise near the pavilion",
-      description: "Repeated late night noise near the park pavilion on weekends.",
-      location: "Riverside Park pavilion",
-    });
+    const safetyReport = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", safety.id)
+      .field("title", "Late night noise near the pavilion")
+      .field("description", "Repeated late night noise near the park pavilion on weekends.")
+      .field("location", "Riverside Park pavilion")
+      .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
+        filename: "safety.png",
+        contentType: "image/png",
+      });
     expect(safetyReport.status).toBe(201);
-    const roadsReport = await residentAgent.post("/api/reports").send({
-      categoryId: roads.id,
-      title: "Broken streetlight on Oak Street",
-      description: "The streetlight outside number 12 has been out for a week.",
-      location: "Oak Street 12",
-    });
+    const roadsReport = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Broken streetlight on Oak Street")
+      .field("description", "The streetlight outside number 12 has been out for a week.")
+      .field("location", "Oak Street 12")
+      .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
+        filename: "streetlight.png",
+        contentType: "image/png",
+      });
     expect(roadsReport.status).toBe(201);
 
     await officerAgent

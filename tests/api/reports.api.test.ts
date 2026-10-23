@@ -3,7 +3,8 @@
 import { readdirSync } from "node:fs";
 
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
 
 import {
   cleanupApplications,
@@ -12,6 +13,8 @@ import {
 } from "./helpers";
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await cleanupApplications();
 });
 
@@ -144,6 +147,7 @@ describe("photo attachments", () => {
   it("limits submissions to residents and refuses categories whose organization is inactive", async () => {
     const { admin, app, officialAgent, residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
+    const png = Buffer.from(PNG_BASE64, "base64");
 
     await officialAgent.post("/api/reports").send({
       categoryId: roads.id,
@@ -162,6 +166,7 @@ describe("photo attachments", () => {
       .field("title", "Pothole on a local road")
       .field("description", "The road surface is broken and needs an inspection.")
       .field("location", "Main Street")
+      .attach("photo", png, { filename: "curb-ramp.png", contentType: "image/png" })
       .expect(422);
     expect(rejected.body.error.fieldErrors.categoryId).toContain(
       "Choose a category routed to an active organization.",
@@ -223,7 +228,7 @@ describe("photo attachments", () => {
       .field("title", "Report with a giant attachment")
       .field("description", "This upload exceeds the five megabyte attachment limit.")
       .field("location", "Nowhere Street 2")
-      .attach("photo", Buffer.alloc(5 * 1024 * 1024 + 1, 0x42), {
+      .attach("photo", Buffer.alloc(MAX_REPORT_PHOTO_BYTES + 1, 0x42), {
         filename: "huge.png",
         contentType: "image/png",
       });
@@ -250,7 +255,11 @@ describe("report filtering", () => {
     const create = (categoryId: string, title: string, description: string, location: string) =>
       residentAgent
         .post("/api/reports")
-        .send(reportFields(categoryId, title, description, location))
+        .field("categoryId", categoryId)
+        .field("title", title)
+        .field("description", description)
+        .field("location", location)
+        .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "report.png", contentType: "image/png" })
         .expect(201);
 
     const pothole = await create(
@@ -427,5 +436,110 @@ describe("report filtering", () => {
     expect(all.body.reports.map((report: { id: string }) => report.id)).toEqual([
       ids.bench,
     ]);
+  });
+});
+
+describe("photo required, AI problem detection, and deterministic municipal rep resolution", () => {
+  it("requires a photo upload to create a report and returns 422 if omitted", async () => {
+    const { residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+
+    const response = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Report without a photo")
+      .field("description", "Testing photo required validation.")
+      .field("location", "Main St and 1st Ave")
+      .expect(422);
+
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(response.body.error.message).toContain("photo of the issue is required");
+    expect(response.body.error.fieldErrors.photo).toContain("A photo of the issue is required.");
+  });
+
+  it("detects the problem in an uploaded photo using AI logic via /api/reports/analyze-photo", async () => {
+    const { residentAgent } = await scenario();
+    const png = Buffer.from(PNG_BASE64, "base64");
+    vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({
+          problem: "A pothole is visible in the road.",
+          detectedIssueType: "Roads and Sidewalks",
+          suggestedCategoryName: "Roads and Sidewalks",
+          suggestedTitle: "Pothole in roadway",
+          suggestedDescription: "A pothole is visible in the roadway.",
+          confidence: 0.91,
+          detectedCues: ["Broken asphalt", "Road surface depression"],
+        }) }] } }],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )));
+    const readiness = await residentAgent.get("/api/routing/readiness").expect(200);
+    expect(readiness.body.photoClassification).toMatchObject({
+      status: "configured",
+      provider: "google_gemini",
+    });
+
+    const response = await residentAgent
+      .post("/api/reports/analyze-photo")
+      .attach("photo", png, { filename: "pothole-damage.png", contentType: "image/png" })
+      .expect(200);
+
+    expect(response.body.analysis).toBeDefined();
+    expect(response.body.analysis.problem).toContain("pothole");
+    expect(response.body.analysis.detectedIssueType).toBe("Roads and Sidewalks");
+    expect(response.body.analysis.suggestedTitle).toBeDefined();
+    expect(response.body.analysis.confidence).toBeGreaterThan(0.7);
+    expect(response.body.analysis.detectedCues.length).toBeGreaterThan(0);
+    expect(response.body.analysis.suggestedCategoryName).toBe("Roads and Sidewalks");
+    expect(response.body.analysis.aiModel).toBe("Gemini 3.8 Flash (Multimodal Vision)");
+  });
+
+  it("reports that AI photo analysis needs server configuration", async () => {
+    const { residentAgent } = await scenario();
+    vi.stubEnv("GEMINI_API_KEY", "");
+
+    const readiness = await residentAgent.get("/api/routing/readiness").expect(200);
+    expect(readiness.body.photoClassification).toMatchObject({
+      status: "unavailable",
+      reason: expect.stringContaining("GEMINI_API_KEY"),
+    });
+
+    const response = await residentAgent
+      .post("/api/reports/analyze-photo")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
+      .expect(503);
+    expect(response.body.error.code).toBe("AI_NOT_CONFIGURED");
+  });
+
+  it("resolves the municipal representative using deterministic code (no AI)", async () => {
+    const { residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+    const png = Buffer.from(PNG_BASE64, "base64");
+
+    const created = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Broken asphalt near intersection")
+      .field("description", "Deep cracking on asphalt road.")
+      .field("location", "Pinned location: 42.36010, -71.05890")
+      .attach("photo", png, { filename: "road.png", contentType: "image/png" })
+      .expect(201);
+
+    expect(created.body.nearestRepresentative).toBeDefined();
+    expect(created.body.nearestRepresentative.displayName).toBe("Olive Official");
+    expect(created.body.nearestRepresentative.organizationName).toBe("Public Works");
+    expect(created.body.nearestRepresentative.municipalityName).toBe("Springfield");
+
+    const detail = await residentAgent
+      .get(`/api/reports/${created.body.id}`)
+      .expect(200);
+
+    expect(detail.body.nearestRepresentative).toMatchObject({
+      displayName: "Olive Official",
+      organizationName: "Public Works",
+      municipalityName: "Springfield",
+    });
   });
 });

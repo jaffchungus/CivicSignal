@@ -13,6 +13,7 @@ export function PrivacyPage() {
         <li>A session cookie in your browser; the server stores a hash of the session token and an expiry time.</li>
         <li>Report issue type, optional summary and details, exact location, status history, official updates, and related notifications.</li>
         <li>An optional photo, if you choose to upload one. Text drafts are stored in this browser; selected photos are not saved in drafts.</li>
+        <li>When AI photo analysis is configured, a selected photo is sent to Google Gemini to generate issue suggestions, even if you cancel before submitting the report. On Google's free API tier, submitted content may be used to improve Google products. Do not send photos containing sensitive information. See Google's <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
         <li>For a report sent without an account, a random secure tracking token is issued. The server stores only its hash. The link grants access to that report for 90 days.</li>
       </ul>
 

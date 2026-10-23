@@ -85,7 +85,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
             </div>
           </div>
           <ol className="journey-list">
-            <li><span>1</span><div><strong>Show the issue</strong><small>Choose a photo if it helps. A photo is optional.</small></div></li>
+            <li><span>1</span><div><strong>Show the issue</strong><small>Take or upload a photo of the issue (required).</small></div></li>
             <li><span>2</span><div><strong>Confirm where it is</strong><small>Use your location or enter an address or landmark.</small></div></li>
             <li><span>3</span><div><strong>Follow what happens</strong><small>Save your reference and secure tracking link.</small></div></li>
           </ol>

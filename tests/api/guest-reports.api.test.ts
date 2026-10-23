@@ -32,7 +32,9 @@ describe("guest reporting and secure follow-up", () => {
 
     const created = await request(app)
       .post("/api/reports/guest")
-      .send({ categoryId: category.id, location: "Main Street and 4th Avenue" })
+      .field("categoryId", category.id)
+      .field("location", "Main Street and 4th Avenue")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "pothole.png", contentType: "image/png" })
       .expect(201);
 
     expect(created.body).toMatchObject({
@@ -53,7 +55,9 @@ describe("guest reporting and secure follow-up", () => {
 
     const other = await request(app)
       .post("/api/reports/guest")
-      .send({ categoryId: category.id, location: "Oak Street" })
+      .field("categoryId", category.id)
+      .field("location", "Oak Street")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "road.png", contentType: "image/png" })
       .expect(201);
     await request(app)
       .get(`/api/reports/${other.body.id}/guest`)

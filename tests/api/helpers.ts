@@ -52,6 +52,10 @@ export const ADMIN_CREDENTIALS = {
   password: "correct horse battery staple",
 };
 
+export const TEST_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+export const TEST_PNG_BUFFER = Buffer.from(TEST_PNG_BASE64, "base64");
+
 /** Runs first-run setup and returns a signed-in administrator agent. */
 export function setupAdministrator(app: Express) {
   const agent = request.agent(app);

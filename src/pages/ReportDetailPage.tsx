@@ -185,6 +185,22 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
           </div>
           <StatusBadge status={report.status} />
         </div>
+
+        <div className="location-route-banner">
+          <div className="location-route-info">
+            <span className="field-label">Incident Location</span>
+            <p className="location-text">📍 {report.location}</p>
+          </div>
+          <a
+            className="button primary route-button"
+            href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(report.location)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            🗺️ Open Google Maps Route
+          </a>
+        </div>
+
         <section className="next-step" aria-labelledby="next-step-heading">
           <div className="next-step-status"><span>Current step</span><strong>{reportStatusLabel(report.status)}</strong></div>
           <div>
@@ -204,8 +220,11 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
             <dd>{formatDateTime(report.submittedAt)}</dd>
           </div>
           <div>
-            <dt>Handled by</dt>
-            <dd>{report.assignedTo?.displayName ?? "Not yet claimed"}</dd>
+            <dt>Municipal Representative</dt>
+            <dd>
+              {report.assignedTo?.displayName ?? report.nearestRepresentative?.displayName ?? "Municipal Staff"}
+              {report.nearestRepresentative?.municipalityName ? ` (${report.nearestRepresentative.municipalityName})` : ""}
+            </dd>
           </div>
           <div>
             <dt>Last update</dt>
