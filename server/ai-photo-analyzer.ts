@@ -25,7 +25,7 @@ export function isPhotoAnalysisConfigured(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
-/** Analyze a photo with Gemini Vision. The filename is deliberately not sent to the provider. */
+/** Prepare factual issue suggestions from a photo. The filename is not sent to the provider. */
 export async function detectProblemInPhoto(
   imageBuffer: Buffer,
   mimeType: string,
@@ -36,7 +36,7 @@ export async function detectProblemInPhoto(
     throw new ApiError(
       503,
       "AI_NOT_CONFIGURED",
-      "Photo analysis is unavailable because this deployment has not configured GEMINI_API_KEY.",
+      "Photo suggestions are unavailable right now. You can enter the issue details manually.",
     );
   }
 
@@ -101,7 +101,7 @@ Return only a JSON object with this shape:
     throw new ApiError(
       503,
       "AI_PROVIDER_UNAVAILABLE",
-      "The photo analysis service rejected the request. The deployment operator should check the Gemini API key, model access, and quota.",
+      "Photo suggestions are unavailable right now. You can enter the issue details manually.",
     );
   }
 
@@ -160,7 +160,6 @@ Return only a JSON object with this shape:
     suggestedDescription,
     confidence: Math.min(Math.max(confidence, 0), 1),
     detectedCues,
-    aiModel: "Gemini 3.8 Flash (Multimodal Vision)",
   };
 }
 

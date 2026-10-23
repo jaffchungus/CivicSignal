@@ -6,18 +6,22 @@ import { ApiRequestError, api } from "../lib/api";
 import { useAction, useFetch } from "../lib/hooks";
 import { useAuth } from "../lib/auth";
 import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
+import { isCoordinateOnlyLocation } from "../../shared/report-location";
 import type { Category, PhotoAnalysisResult, Report } from "../../shared/contracts";
 
 type Draft = { categoryId: string; title: string; description: string; location: string };
 type RoutingReadiness = {
   jurisdiction?: { status: string; reason?: string };
   photoClassification?: { status: string; reason?: string };
+  photoStorage?: { status: string };
 };
 const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "" };
 
 function readDraft(key: string): Draft {
   try {
-    return { ...emptyDraft, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
+    const draft = { ...emptyDraft, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
+    if (isCoordinateOnlyLocation(draft.location)) draft.location = "";
+    return draft;
   } catch {
     return emptyDraft;
   }
@@ -43,7 +47,6 @@ export function ReportCreatePage() {
   const [analysisResult, setAnalysisResult] = useState<PhotoAnalysisResult | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
   const [step, setStep] = useState<"details" | "confirm">("details");
-  const [locationMessage, setLocationMessage] = useState("");
   const [hasDraft, setHasDraft] = useState(false);
   const { data, loading: categoriesLoading, error: categoriesError, reload } =
     useFetch<{ categories: Category[] }>("/api/categories");
@@ -69,7 +72,7 @@ export function ReportCreatePage() {
       const res = await api.postForm<{ analysis: PhotoAnalysisResult }>("/api/reports/analyze-photo", payload);
       if (photoAnalysisRequestId.current !== requestId) return;
       setAnalysisResult(res.analysis);
-      setAnalysisMessage(`AI detected: ${res.analysis.problem}`);
+      setAnalysisMessage(null);
       setForm((current) => {
         let matchedCatId = current.categoryId;
         if (!matchedCatId && res.analysis.suggestedCategoryName && categories.length > 0) {
@@ -88,9 +91,9 @@ export function ReportCreatePage() {
       });
     } catch (error) {
       if (photoAnalysisRequestId.current !== requestId) return;
-      setAnalysisMessage(error instanceof ApiRequestError
-        ? error.message
-        : "AI could not analyze this image automatically. Please verify the issue details manually.");
+      setAnalysisMessage(error instanceof ApiRequestError && error.code === "INVALID_IMAGE_CONTENT"
+        ? "Choose a valid image file. You can enter the issue details manually."
+        : "Photo suggestions are unavailable right now. You can enter the issue details manually.");
     } finally {
       if (photoAnalysisRequestId.current === requestId) setAnalyzingPhoto(false);
     }
@@ -123,23 +126,6 @@ export function ReportCreatePage() {
       setHasDraft(false);
     }
   }, [authLoading, changingIdentity, draftKey, form]);
-
-  function updateLocationFromDevice() {
-    setLocationMessage("");
-    if (!navigator.geolocation) {
-      setLocationMessage("This browser cannot share a location. Enter a street, intersection, or landmark instead.");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const pin = `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
-        setForm((current) => ({ ...current, location: `Pinned location: ${pin}` }));
-        setLocationMessage("Location added. Review it below and edit the address or landmark before continuing.");
-      },
-      () => setLocationMessage("We could not read your location. You can enter an address or landmark instead."),
-      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 60_000 },
-    );
-  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -185,6 +171,8 @@ export function ReportCreatePage() {
 
   const chosenCategory = categories.find((category) => category.id === form.categoryId);
   const routingUnavailable = !categoriesLoading && !categoriesError && categories.length === 0;
+  const photoStorageUnavailable = routingReadiness?.photoStorage?.status === "unavailable";
+  const coordinatesEntered = isCoordinateOnlyLocation(form.location);
 
   useEffect(() => {
     if (!photo) {
@@ -204,7 +192,7 @@ export function ReportCreatePage() {
         <div>
           <p className="eyebrow">See it. Snap it. Help fix it.</p>
           <h1>Report a local issue</h1>
-          <p className="muted">A photo of the issue is required. The AI analyzes the photo to detect the problem, and a clear location helps route to the municipal representative.</p>
+          <p className="muted">A photo of the issue is required. Include a street address, intersection, or landmark so staff can find it.</p>
         </div>
         <span className="step-indicator" aria-label={step === "details" ? "Step 1 of 2" : "Step 2 of 2"}>
           {step === "details" ? "1 of 2" : "2 of 2"}
@@ -234,7 +222,12 @@ export function ReportCreatePage() {
       )}
       {routingReadiness?.photoClassification?.status === "unavailable" && (
         <p className="muted routing-limit" role="note">
-          AI photo suggestions are unavailable. {routingReadiness.photoClassification.reason} You can still enter the issue details manually.
+          Photo suggestions are unavailable. You can enter the issue details manually.
+        </p>
+      )}
+      {photoStorageUnavailable && (
+        <p className="warning" role="status">
+          Photo storage is temporarily unavailable. You can save your text draft and try again later.
         </p>
       )}
 
@@ -244,7 +237,7 @@ export function ReportCreatePage() {
             <div className="report-action-grid">
               <Field
                 label="Photo (required)"
-                hint="Photo limit: 4 MiB. When AI analysis is available, the image is sent to Google Gemini; free-tier content may be used to improve Google products. Avoid sensitive details and verify suggestions."
+                hint="Photo limit: 4 MiB. If photo suggestions are available, your photo may be sent to an external image-processing service. Avoid sensitive details and review any suggestions."
                 error={photoError ?? undefined}
               >
                 <input
@@ -273,30 +266,26 @@ export function ReportCreatePage() {
               </Field>
               {photo && <p className="muted" role="status">Selected: {photo.name}</p>}
               <div className="location-action">
-                <strong>Confirm the location</strong>
-                <p className="muted">Choose a pin using your device or enter an address, intersection, or landmark.</p>
-                <button className="button" type="button" onClick={updateLocationFromDevice}>Use my current location</button>
+                <strong>Enter the precise location</strong>
+                <p className="muted">Use the street address, nearest intersection, or a nearby landmark.</p>
               </div>
             </div>
 
             {analyzingPhoto && (
               <div className="card ai-card analyzing" role="status">
-                <span>🤖 Analyzing photo with AI to detect the problem…</span>
+                <span>Preparing photo suggestions…</span>
               </div>
             )}
 
             {analysisResult && (
-              <div className="card ai-card" role="region" aria-label="AI defect analysis">
+              <div className="card ai-card" role="region" aria-label="Photo suggestions">
                 <div className="ai-card-header">
-                  <span className="badge ai-badge">🤖 AI Problem Detection</span>
-                  <span className="muted ai-confidence">
-                    {Math.round(analysisResult.confidence * 100)}% confidence · {analysisResult.aiModel}
-                  </span>
+                  <span className="badge ai-badge">Photo suggestions</span>
                 </div>
                 <p className="ai-problem-text">
-                  <strong>Detected Problem:</strong> {analysisResult.problem}
+                  <strong>Possible issue:</strong> {analysisResult.problem}
                 </p>
-                <p className="muted">AI suggestions can be wrong. Confirm the issue type, title, and details before submitting.</p>
+                <p className="muted">These suggestions can be wrong. Confirm the issue type, title, and details before submitting.</p>
                 {analysisResult.detectedCues && analysisResult.detectedCues.length > 0 && (
                   <p className="muted ai-cues">
                     <strong>Visual cues:</strong> {analysisResult.detectedCues.join(" · ")}
@@ -318,7 +307,7 @@ export function ReportCreatePage() {
                     }));
                   }}
                 >
-                  ✨ Apply AI title, category & details
+                  Apply suggested title, category & details
                 </button>
               </div>
             )}
@@ -327,31 +316,20 @@ export function ReportCreatePage() {
               <p className="muted" role="status">{analysisMessage}</p>
             )}
 
-            {locationMessage && <p className="muted" role="status">{locationMessage}</p>}
-
-            <Field label="Location" hint="Only shared when you submit. You can edit this before sending." error={fieldErrors.location}>
+            <Field
+              label="Precise location"
+              hint="Enter a street address, intersection, or landmark. Only shared when you submit."
+              error={fieldErrors.location ?? (coordinatesEntered ? "Enter a street address, intersection, or landmark instead of coordinates." : undefined)}
+            >
               <input
                 className="input"
                 value={form.location}
-                placeholder="Street, intersection, or landmark"
+                placeholder="e.g. 25 Main St, or Main St and Oak Ave"
                 onChange={(event) => setForm({ ...form, location: event.target.value })}
                 required
                 autoComplete="street-address"
               />
             </Field>
-            {form.location && form.location.trim().length >= 3 && (
-              <div className="location-route-preview">
-                <a
-                  className="button button-sm maps-route-button"
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(form.location)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  🗺️ Open Route on Google Maps
-                </a>
-              </div>
-            )}
-
             <Field label="Issue type" hint={chosenCategory?.description || "Choose the closest configured category. CivicSignal does not guess the receiving organization."} error={fieldErrors.categoryId}>
               <select
                 className="select"
@@ -381,7 +359,7 @@ export function ReportCreatePage() {
               <button
                 className="button primary"
                 type="button"
-                disabled={!photo || analyzingPhoto || !form.categoryId || !form.location || routingUnavailable || categoriesLoading || Boolean(categoriesError)}
+                disabled={!photo || analyzingPhoto || !form.categoryId || !form.location || coordinatesEntered || routingUnavailable || photoStorageUnavailable || categoriesLoading || Boolean(categoriesError)}
                 onClick={() => {
                   if (!photo) {
                     setPhotoError("A photo of the issue is required before continuing.");
@@ -410,23 +388,13 @@ export function ReportCreatePage() {
               )}
               {analysisResult && (
                 <div>
-                  <dt>AI Detected Problem</dt>
-                  <dd>🤖 {analysisResult.problem}</dd>
+                  <dt>Photo suggestion</dt>
+                  <dd>{analysisResult.problem}</dd>
                 </div>
               )}
               <div>
                 <dt>Location</dt>
-                <dd className="location-confirm-cell">
-                  <span>{form.location}</span>
-                  <a
-                    className="button button-sm maps-route-button"
-                    href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(form.location)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    🗺️ Route on Google Maps
-                  </a>
-                </dd>
+                <dd>{form.location}</dd>
               </div>
               <div><dt>Issue type</dt><dd>{chosenCategory?.name ?? "Not selected"}</dd></div>
               <div><dt>Receiving organization</dt><dd>{chosenCategory?.organizationName ?? "Not configured"}</dd></div>
@@ -435,12 +403,12 @@ export function ReportCreatePage() {
             </dl>
             <div className="privacy-summary">
               <strong>Privacy</strong>
-              <p>Your photo, location, and details are shared with the receiving organization and authorized CivicSignal staff for this report. When AI photo analysis is configured, the selected photo is also sent to Google Gemini for suggestions; on Google's free API tier, submitted content may be used to improve Google products. This happens even if you later cancel this report. This report is not publicly listed. Keep the secure tracking link private.</p>
+              <p>Your photo, location, and details are shared with the receiving organization and authorized CivicSignal staff for this report. If photo suggestions are available, your selected photo may also be sent to an external image-processing service, even if you later cancel this report. This report is not publicly listed. Keep the secure tracking link private.</p>
               {!user && <p>No account is needed. A secure, one-time tracking link will be shown after submission; save it to return to your report.</p>}
             </div>
             {error && <p className="error" role="alert">{error}</p>}
             <div className="button-row">
-              <button className="button primary" type="submit" disabled={pending}>{pending ? "Sending report…" : "Submit report"}</button>
+              <button className="button primary" type="submit" disabled={pending || photoStorageUnavailable}>{pending ? "Sending report…" : "Submit report"}</button>
               <button className="button" type="button" onClick={() => setStep("details")} disabled={pending}>Edit report</button>
               <Link className="button" to="/">Cancel</Link>
             </div>

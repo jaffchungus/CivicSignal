@@ -17,6 +17,7 @@ import {
   type ReportStatus,
   type UserRole,
 } from "../../shared/contracts.js";
+import { isCoordinateOnlyLocation, reportLocationLabel } from "../../shared/report-location.js";
 import type { CivicDatabase } from "../database.js";
 import {
   createNotification,
@@ -124,7 +125,10 @@ const createReportSchema = z.object({
   categoryId: z.string().trim().min(1),
   title: z.string().trim().max(140).optional().default(""),
   description: z.string().trim().max(4000).optional().default(""),
-  location: z.string().trim().min(3).max(300),
+  location: z.string().trim().min(3).max(300).refine(
+    (location) => !isCoordinateOnlyLocation(location),
+    "Enter a street address, intersection, or landmark instead of coordinates.",
+  ),
 });
 
 const listQuerySchema = z.object({
@@ -207,7 +211,7 @@ function serializeSummary(row: ReportRow) {
     referenceCode: row.reference_code,
     title: row.title,
     description: row.description,
-    location: row.location,
+    location: reportLocationLabel(row.location),
     status: row.status,
     moderationStatus: row.moderation_status,
     category: {
@@ -766,7 +770,7 @@ export function createReportsRouter(deps: {
         throw new ApiError(
           422,
           "VALIDATION_ERROR",
-          "A photo of the issue is required for AI problem detection.",
+          "A photo of the issue is required to create a report.",
           { photo: ["Please upload or take a photo to analyze."] },
         );
       }

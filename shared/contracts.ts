@@ -168,7 +168,6 @@ export type PhotoAnalysisResult = {
   suggestedDescription: string;
   confidence: number;
   detectedCues: string[];
-  aiModel: string;
 };
 
 export type Notification = {

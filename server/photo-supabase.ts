@@ -23,15 +23,17 @@ export class SupabasePhotoStore implements PhotoStore {
   }
 
   async save(buffer: Buffer, originalName: string, contentType: string): Promise<StoredPhoto> {
-    const storedName = `photos/${randomUUID()}${photoExtension(originalName)}`;
-    const { data, error } = await this.client.storage.from(this.bucket).upload(storedName, buffer, {
-      contentType,
-      upsert: false,
-    });
-    if (error || !data) {
-      throw new ApiError(503, "UPLOAD_ERROR", "Photo storage is unavailable. Please try again.");
+    try {
+      const storedName = `photos/${randomUUID()}${photoExtension(originalName)}`;
+      const { data, error } = await this.client.storage.from(this.bucket).upload(storedName, buffer, {
+        contentType,
+        upsert: false,
+      });
+      if (error || !data) throw new Error("Photo storage upload failed.");
+      return { storedName: data.path };
+    } catch {
+      throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
     }
-    return { storedName: data.path };
   }
 
   async remove(storedName: string): Promise<void> {

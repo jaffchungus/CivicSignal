@@ -24,6 +24,7 @@ type AppOptions = {
   photos: PhotoStore;
   secureCookies?: boolean;
   sessionTtlDays?: number;
+  photoStorageAvailable?: boolean;
 };
 
 export function createApp(options: AppOptions) {
@@ -85,7 +86,7 @@ export function createApp(options: AppOptions) {
   app.use(
     "/api",
     createAuthRouter({ database, secureCookies, sessionDurationMs }),
-    createCatalogRouter({ database }),
+    createCatalogRouter({ database, photoStorageAvailable: options.photoStorageAvailable }),
   );
   app.use(
     "/api/reports",

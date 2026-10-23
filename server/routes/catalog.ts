@@ -7,8 +7,8 @@ import type { CivicDatabase } from "../database.js";
 import { jurisdictionProviderStatus } from "../jurisdiction.js";
 import { isPhotoAnalysisConfigured } from "../ai-photo-analyzer.js";
 
-export function createCatalogRouter(deps: { database: CivicDatabase }): Router {
-  const { database } = deps;
+export function createCatalogRouter(deps: { database: CivicDatabase; photoStorageAvailable?: boolean }): Router {
+  const { database, photoStorageAvailable = true } = deps;
   const router = Router();
 
   router.get("/organizations", async (_request, response) => {
@@ -45,8 +45,11 @@ export function createCatalogRouter(deps: { database: CivicDatabase }): Router {
       categoryRouting: activeCategories > 0 ? "configured" : "unavailable",
       jurisdiction: jurisdictionProviderStatus(),
       photoClassification: photoAnalysisConfigured
-        ? { status: "configured", provider: "google_gemini" }
-        : { status: "unavailable", reason: "Set GEMINI_API_KEY on the server to enable AI photo analysis." },
+        ? { status: "configured" }
+        : { status: "unavailable" },
+      photoStorage: photoStorageAvailable
+        ? { status: "configured" }
+        : { status: "unavailable" },
       duplicateDetection: { status: "unavailable", reason: "No location-aware duplicate matching is configured." },
       externalNotifications: { status: "unavailable", reason: "No verified email or text provider is configured." },
       reviewWindow: { status: "unavailable", reason: "No organization review estimate is configured." },

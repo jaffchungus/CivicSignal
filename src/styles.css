@@ -1579,7 +1579,7 @@ input[type="file"].input {
   }
 }
 
-/* AI Photo Problem Detection & Google Maps Route Navigation */
+/* Photo suggestions */
 .ai-card {
   background: #f4fbf7;
   border: 1px solid #c2e2d0;
@@ -1652,12 +1652,10 @@ input[type="file"].input {
   border-color: var(--forest-900);
 }
 
-.location-route-banner {
+.incident-location {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.8rem;
+  flex-direction: column;
+  gap: 0.25rem;
   background: #edf5f0;
   border: 1px solid #c7ded0;
   border-radius: var(--radius);
@@ -1665,31 +1663,8 @@ input[type="file"].input {
   margin: 0.85rem 0 1rem;
 }
 
-.location-route-info .location-text {
-  margin: 0.1rem 0 0;
+.incident-location p {
+  margin: 0;
   font-weight: 600;
   color: var(--forest-950);
-}
-
-.maps-route-button,
-.route-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.86rem;
-  font-weight: 600;
-  text-decoration: none;
-  border-radius: 8px;
-  padding: 0.45rem 0.85rem;
-}
-
-.location-route-preview {
-  margin-top: 0.4rem;
-}
-
-.location-confirm-cell {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
 }

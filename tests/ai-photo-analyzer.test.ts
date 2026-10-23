@@ -61,7 +61,6 @@ describe("Gemini photo analysis", () => {
       data: image.toString("base64"),
     });
     expect(result.problem).toBe("A pothole is visible in the road.");
-    expect(result.aiModel).toBe("Gemini 3.8 Flash (Multimodal Vision)");
   });
 
   it("reports missing configuration instead of inventing a photo analysis", async () => {

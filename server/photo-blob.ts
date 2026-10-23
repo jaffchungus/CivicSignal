@@ -8,11 +8,16 @@ import { ApiError } from "./http.js";
 import { photoExtension, type PhotoStore, type StoredPhoto } from "./photo-store.js";
 
 export class BlobPhotoStore implements PhotoStore {
-  save(buffer: Buffer, originalName: string, contentType: string): Promise<StoredPhoto> {
-    return put(`photos/${randomUUID()}${photoExtension(originalName, contentType)}`, buffer, {
-      access: "private",
-      contentType,
-    }).then((blob) => ({ storedName: blob.url }));
+  async save(buffer: Buffer, originalName: string, contentType: string): Promise<StoredPhoto> {
+    try {
+      const blob = await put(`photos/${randomUUID()}${photoExtension(originalName, contentType)}`, buffer, {
+        access: "private",
+        contentType,
+      });
+      return { storedName: blob.url };
+    } catch {
+      throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
+    }
   }
 
   remove(storedName: string): Promise<void> {

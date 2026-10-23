@@ -155,6 +155,7 @@ export async function createProductionApp() {
   if (!database) throw databaseError;
 
   let photos: PhotoStore;
+  let photoStorageAvailable = true;
   try {
     const config = productionPhotoConfig(process.env);
     photos = config.provider === "supabase"
@@ -166,11 +167,13 @@ export async function createProductionApp() {
   } catch (error) {
     console.error("[production] Photo storage unavailable; starting API without photo support:", error);
     photos = new UnavailablePhotoStore();
+    photoStorageAvailable = false;
   }
 
   return createApp({
     database,
     photos,
+    photoStorageAvailable,
     secureCookies: process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL),
   });
 }
