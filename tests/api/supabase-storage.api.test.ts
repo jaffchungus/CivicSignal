@@ -210,7 +210,7 @@ describe("Supabase private photos", () => {
     const { body: { categories } } = await owner.get("/api/categories").expect(200);
     const rejected = await submitPhoto(owner, categories[0].id);
     expect(rejected.status).toBe(503);
-    expect(rejected.body.error).toMatchObject({ code: "UPLOAD_ERROR" });
+    expect(rejected.body.error).toMatchObject({ code: "PHOTO_STORAGE_UNAVAILABLE" });
     expect((await owner.get("/api/reports").expect(200)).body.reports).toEqual([]);
   });
 

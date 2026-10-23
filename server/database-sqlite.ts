@@ -130,6 +130,11 @@ const SQLITE_SCHEMA = `
     CREATE INDEX IF NOT EXISTS attachments_report_idx
       ON attachments(report_id);
 
+    CREATE TABLE IF NOT EXISTS report_photos (
+      id TEXT PRIMARY KEY,
+      photo_data BLOB NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

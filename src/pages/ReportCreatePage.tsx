@@ -15,6 +15,13 @@ type RoutingReadiness = {
   photoClassification?: { status: string; reason?: string };
   photoStorage?: { status: string };
 };
+type LocationLookupInfo = {
+  providerName?: string;
+  attribution?: string;
+  attributionUrl?: string;
+  policyUrl?: string;
+  usageNote?: string;
+};
 const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "" };
 
 function readDraft(key: string): Draft {
@@ -47,11 +54,14 @@ export function ReportCreatePage() {
   const [analysisResult, setAnalysisResult] = useState<PhotoAnalysisResult | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
   const [step, setStep] = useState<"details" | "confirm">("details");
+  const [locationMessage, setLocationMessage] = useState("");
+  const [locationLookupBusy, setLocationLookupBusy] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
   const { data, loading: categoriesLoading, error: categoriesError, reload } =
     useFetch<{ categories: Category[] }>("/api/categories");
   const categories = data?.categories ?? [];
   const { data: routingReadiness } = useFetch<RoutingReadiness>("/api/routing/readiness");
+  const { data: locationLookupInfo } = useFetch<LocationLookupInfo>("/api/location/attribution");
   const { pending, error, fieldErrors, run } = useAction();
 
   async function handlePhotoChange(file: File | null) {
@@ -97,6 +107,36 @@ export function ReportCreatePage() {
     } finally {
       if (photoAnalysisRequestId.current === requestId) setAnalyzingPhoto(false);
     }
+  }
+
+  function updateLocationFromDevice() {
+    setLocationMessage("");
+    if (!navigator.geolocation) {
+      setLocationMessage("This browser cannot share a location. Enter the address, intersection, or landmark manually.");
+      return;
+    }
+
+    setLocationLookupBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        void api.post<{ address: string }>("/api/location/reverse", {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        }).then(({ address }) => {
+          setForm((current) => ({ ...current, location: address }));
+          setLocationMessage("Address added. Check it and edit it if needed.");
+        }).catch((error: unknown) => {
+          setLocationMessage(error instanceof ApiRequestError
+            ? error.message
+            : "Address lookup is temporarily unavailable. Enter the location manually.");
+        }).finally(() => setLocationLookupBusy(false));
+      },
+      () => {
+        setLocationLookupBusy(false);
+        setLocationMessage("We couldn't read your device location. Allow location access or enter the address manually.");
+      },
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+    );
   }
 
   useEffect(() => {
@@ -267,7 +307,16 @@ export function ReportCreatePage() {
               {photo && <p className="muted" role="status">Selected: {photo.name}</p>}
               <div className="location-action">
                 <strong>Enter the precise location</strong>
-                <p className="muted">Use the street address, nearest intersection, or a nearby landmark.</p>
+                <p className="muted">Type an address, intersection, or landmark, or use your device location to fill in an editable address.</p>
+                <button className="button" type="button" onClick={updateLocationFromDevice} disabled={locationLookupBusy}>
+                  {locationLookupBusy ? "Finding address…" : "Use my current location"}
+                </button>
+                {locationMessage && <p className="muted" role="status">{locationMessage}</p>}
+                <p className="muted location-attribution">
+                  Your device location is sent to {locationLookupInfo?.providerName ?? "the address lookup service"}; the returned address is editable. {locationLookupInfo?.usageNote}
+                  {locationLookupInfo?.attribution && locationLookupInfo.attributionUrl && <> <a href={locationLookupInfo.attributionUrl} target="_blank" rel="noreferrer">{locationLookupInfo.attribution}</a>.</>}
+                  {locationLookupInfo?.policyUrl && <> <a href={locationLookupInfo.policyUrl} target="_blank" rel="noreferrer">Lookup service policy</a>.</>}
+                </p>
               </div>
             </div>
 
@@ -328,6 +377,7 @@ export function ReportCreatePage() {
                 onChange={(event) => setForm({ ...form, location: event.target.value })}
                 required
                 autoComplete="street-address"
+                maxLength={300}
               />
             </Field>
             <Field label="Issue type" hint={chosenCategory?.description || "Choose the closest configured category. CivicSignal does not guess the receiving organization."} error={fieldErrors.categoryId}>

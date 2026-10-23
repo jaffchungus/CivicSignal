@@ -1,9 +1,10 @@
 import { createApp } from "./app.js";
 import { createPostgresDatabase } from "./database-postgres.js";
-import { ApiError } from "./http.js";
+import { DatabasePhotoStore } from "./photo-database.js";
 import { BlobPhotoStore } from "./photo-blob.js";
+import { PhotoFallbackStore } from "./photo-fallback.js";
 import { SupabasePhotoStore } from "./photo-supabase.js";
-import type { PhotoStore, StoredPhoto } from "./photo-store.js";
+import type { PhotoStore } from "./photo-store.js";
 import { createSupabaseServerClient } from "./supabase.js";
 
 type Environment = Record<string, string | undefined>;
@@ -89,15 +90,18 @@ function supabasePoolerConnectionStrings(connectionString: string, environment: 
 
 function productionPhotoConfig(environment: Environment) {
   const secretKey = environment.SUPABASE_SECRET_KEY || environment.SUPABASE_SERVICE_ROLE_KEY;
-  const provider = environment.PHOTO_STORAGE || (secretKey ? "supabase" : "blob");
+  const provider = environment.PHOTO_STORAGE || (
+    secretKey ? "supabase" : environment.BLOB_READ_WRITE_TOKEN ? "blob" : "database"
+  );
+  if (provider === "database") return { provider } as const;
   if (provider === "blob") {
     if (!environment.BLOB_READ_WRITE_TOKEN) {
-      throw new Error("BLOB_READ_WRITE_TOKEN is required for Blob storage, or configure PHOTO_STORAGE=supabase.");
+      throw new Error("BLOB_READ_WRITE_TOKEN is required for Blob storage.");
     }
     return { provider } as const;
   }
   if (provider !== "supabase") {
-    throw new Error("PHOTO_STORAGE must be supabase or blob for an external database deployment.");
+    throw new Error("PHOTO_STORAGE must be database, supabase, or blob.");
   }
   const url = environment.SUPABASE_URL || environment.NEXT_PUBLIC_SUPABASE_URL;
   if (!url || new URL(url).protocol !== "https:") {
@@ -121,22 +125,6 @@ export function productionConfig(environment: Environment = process.env) {
   };
 }
 
-/** Keeps non-photo API routes available when the optional photo service is down. */
-class UnavailablePhotoStore implements PhotoStore {
-  async save(_buffer: Buffer, _originalName: string, _contentType: string): Promise<StoredPhoto> {
-    throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
-  }
-
-  async remove(_storedName: string): Promise<void> {
-    throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
-  }
-
-  async read(_storedName: string): Promise<Buffer> {
-    throw new ApiError(503, "PHOTO_STORAGE_UNAVAILABLE", "Photo storage is temporarily unavailable.");
-  }
-
-}
-
 export async function createProductionApp() {
   // The database is required for CivicSignal's account and report data.
   // Photo storage is optional: its missing credentials or an unavailable
@@ -155,25 +143,28 @@ export async function createProductionApp() {
   if (!database) throw databaseError;
 
   let photos: PhotoStore;
-  let photoStorageAvailable = true;
   try {
     const config = productionPhotoConfig(process.env);
-    photos = config.provider === "supabase"
+    const primary = config.provider === "supabase"
       ? await SupabasePhotoStore.create(
           createSupabaseServerClient(config.url, config.secretKey),
           config.bucket,
         )
-      : new BlobPhotoStore();
-  } catch (error) {
-    console.error("[production] Photo storage unavailable; starting API without photo support:", error);
-    photos = new UnavailablePhotoStore();
-    photoStorageAvailable = false;
+      : config.provider === "blob"
+        ? new BlobPhotoStore()
+        : new DatabasePhotoStore(database);
+    photos = config.provider === "database"
+      ? primary
+      : new PhotoFallbackStore(primary, new DatabasePhotoStore(database));
+  } catch {
+    console.error("[production] Configured photo storage failed; using database photo storage.");
+    photos = new DatabasePhotoStore(database);
   }
 
   return createApp({
     database,
     photos,
-    photoStorageAvailable,
+    photoStorageAvailable: true,
     secureCookies: process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL),
   });
 }

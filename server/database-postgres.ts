@@ -130,6 +130,11 @@ const POSTGRES_SCHEMA = `
     CREATE INDEX IF NOT EXISTS attachments_report_idx
       ON attachments(report_id);
 
+    CREATE TABLE IF NOT EXISTS report_photos (
+      id TEXT PRIMARY KEY,
+      photo_data BYTEA NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -197,7 +202,7 @@ const DATA_API_PROTECTION = `
   BEGIN
     FOREACH table_name IN ARRAY ARRAY[
       'settings', 'organizations', 'users', 'sessions', 'categories', 'reports',
-      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'notifications', 'audit_events'
+      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'report_photos', 'notifications', 'audit_events'
     ] LOOP
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
       EXECUTE format('REVOKE ALL ON TABLE %I FROM PUBLIC', table_name);

@@ -55,10 +55,14 @@ describe("production configuration", () => {
     }).photos.provider).toBe("blob");
   });
 
-  it("identifies missing SQL/storage credentials instead of using a public key as authorization", () => {
+  it("uses database photos when no private cloud storage credentials are configured", () => {
     expect(() => productionConfig({ NEXT_PUBLIC_SUPABASE_URL })).toThrow("CONNECTION_STRING or DB_PASSWORD is required");
     expect(() => productionConfig({ DATABASE_URL: NEXT_PUBLIC_SUPABASE_URL })).toThrow("Postgres connection string");
-    expect(() => productionConfig({ DATABASE_URL })).toThrow("BLOB_READ_WRITE_TOKEN");
+    expect(productionConfig({ DATABASE_URL }).photos.provider).toBe("database");
+    expect(productionConfig({
+      DATABASE_URL, NEXT_PUBLIC_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+    }).photos.provider).toBe("database");
     expect(() => productionConfig({
       DATABASE_URL, NEXT_PUBLIC_SUPABASE_URL, PHOTO_STORAGE: "supabase",
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",

@@ -14,6 +14,7 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createCatalogRouter } from "./routes/catalog.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
+import { createLocationRouter } from "./routes/location.js";
 import { createReportsRouter } from "./routes/reports.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -88,6 +89,7 @@ export function createApp(options: AppOptions) {
     createAuthRouter({ database, secureCookies, sessionDurationMs }),
     createCatalogRouter({ database, photoStorageAvailable: options.photoStorageAvailable }),
   );
+  app.use("/api", createLocationRouter({ database }));
   app.use(
     "/api/reports",
     createReportsRouter({ database, photos }),

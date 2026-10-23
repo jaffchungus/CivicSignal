@@ -523,6 +523,22 @@ p {
 
 .location-action .button {
   margin-top: 0.4rem;
+  min-height: 48px;
+  padding: 0.65rem 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 660;
+}
+
+.location-attribution {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+.location-attribution a {
+  color: var(--forest-700);
+  text-decoration: underline;
 }
 
 .details-fields {

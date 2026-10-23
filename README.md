@@ -9,7 +9,7 @@ CivicSignal is an independent, nonpartisan community-reporting app. Residents ca
 - **Contracts:** `shared/contracts.ts` owns shared API types, report statuses, and allowed status transitions.
 - **Database:** `CivicDatabase` is the shared async data-access seam. Local development and tests use SQLite; production uses PostgreSQL. Existing schema initialization is performed by the database adapters at startup.
 - **Authentication:** Express issues random session tokens in an HttpOnly, SameSite=Lax cookie (Secure in production). Only a SHA-256 token hash is stored in the database. Report and staff authorization is enforced in API routes.
-- **Photos:** The API checks the declared MIME type against the file signature before storage and serves attachments only after the report authorization check. Supabase Storage buckets must be private. Vercel Blob writes use private access; pre-existing public Blob objects need a separate provider-side migration.
+- **Photos:** The API checks the declared MIME type against the file signature before storage and serves attachments only after the report authorization check. Production uses private Supabase Storage or private Vercel Blob when configured, and falls back to a private Postgres table when those providers are unavailable.
 - **Report history:** Each report stores status events, responsible staff, and official updates. The resident view combines that persisted history with plain-language guidance tied to the current status.
 
 ## Local setup
@@ -36,14 +36,16 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `DATABASE_PATH` | SQLite file for local development (default `./data/civicsignal.db`). |
 | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
 | `SESSION_TTL_DAYS` | Local session expiry in days (local entry defaults to 14). |
-| `GEMINI_API_KEY` | Optional server-only Google Gemini API key for photo analysis. Add it to Vercel's environment settings to enable AI suggestions; never use a `VITE_` or `NEXT_PUBLIC_` prefix. |
+| `GEMINI_API_KEY` | Optional server-only Google Gemini API key for photo analysis. Uses Gemini 3.5 Flash with image support. Add it to Vercel's environment settings to enable AI suggestions; never use a `VITE_` or `NEXT_PUBLIC_` prefix. |
 | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |
 | `DB_PASSWORD` | Alternative for the configured Supabase database host; the server builds a TLS-enabled Postgres URL. |
-| `PHOTO_STORAGE` | Production provider: `supabase` or `blob`. With no explicit choice, a configured Supabase secret selects Supabase; otherwise Blob is used. |
+| `PHOTO_STORAGE` | Production provider: `database`, `supabase`, or `blob`. Without cloud storage credentials, photos use the private `report_photos` table in Postgres. |
 | `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL` | HTTPS Supabase project URL (server reads it; no Supabase Auth is used). |
 | `SUPABASE_SECRET_KEY` | Server-only credential for private Supabase Storage. Never use a publishable key for privileged storage operations. |
 | `SUPABASE_PHOTO_BUCKET` | Private photo bucket name (default `civicsignal-photos`). |
 | `BLOB_READ_WRITE_TOKEN` | Server-only Blob credential when using Blob; connect a **private** Blob store. Vercel OIDC may be available when the store is connected. |
+| `REVERSE_GEOCODER_URL` | Optional HTTPS reverse-geocoding endpoint. Defaults to OpenStreetMap Nominatim. Lookups are user-triggered, cached, and rate-limited. |
+| `REVERSE_GEOCODER_NAME` and attribution settings | Set the provider name, attribution, policy URL, and usage note when changing the reverse-geocoding endpoint. |
 | `SUPABASE_DB_POOLER_HOST` | Optional Supavisor pooler host override for Vercel. |
 
 The Supabase and Vercel configuration details, including private storage requirements and limitations, are in [docs/SUPABASE-DEPLOYMENT.md](docs/SUPABASE-DEPLOYMENT.md). `.env.example` contains placeholders only.
