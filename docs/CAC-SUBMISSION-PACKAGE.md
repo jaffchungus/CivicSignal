@@ -4,16 +4,17 @@ This is a factual draft for the student to review and personalize. Do not submit
 
 ## Deadline and submission requirements
 
-Official CAC pages currently disagree about the October 26, 2026 deadline:
+Official pages currently disagree about the October 26, 2026 deadline:
 
 - The [student registration page](https://www.congressionalappchallenge.us/students/student-registration/) says **9:00 PM ET**.
 - The [2026 official rules PDF](https://www.congressionalappchallenge.us/wp-content/uploads/2026/05/2026-CAC-Rules.pdf) says **12:00 PM EDT (noon)**.
+- [Representative Gottheimer's district page](https://gottheimer.house.gov/congressional-app-challenge) says **8:00 PM**.
 
-Until CAC staff clarifies the discrepancy, plan to submit by **12:00 PM EDT on Monday, October 26**. Confirm the portal's displayed cutoff and current submission checklist before upload. The rules require a public YouTube or Vimeo demonstration video of 1–3 minutes and ask for the app's purpose, audience, tools, and functionality. The 2026 rules permit AI support only with full disclosure and expect significant student contribution and technical understanding.
+Until the CAC confirms the discrepancy, plan to submit by **12:00 PM EDT on Monday, October 26**. Confirm the portal's displayed cutoff and current submission checklist before upload. The rules require a public YouTube or Vimeo demonstration video of 1–3 minutes and ask for the app's purpose, audience, tools, and functionality. The 2026 rules permit AI support only with full disclosure and expect significant student contribution and technical understanding.
 
 ## App description
 
-**CivicSignal helps residents report non-emergency neighborhood issues to organizations configured for a community and follow the status changes and official updates recorded for each report.**
+**CivicSignal lets residents submit a non-emergency issue to an organization configured for the selected category, then see the status changes, official updates, and action history recorded for that report.**
 
 CivicSignal is an independent, nonpartisan project. It is not a government service, a 311 integration, or an emergency response channel.
 
@@ -60,13 +61,13 @@ Do not put demo passwords in source code or video. A second browser profile can 
 ## Demo-video script · about 2 minutes
 
 **0:00–0:15 — Introduction**  
-“Hi, I’m [student name]. My app is CivicSignal. It helps residents report non-emergency neighborhood issues and follow the response recorded by the organization configured for that community.”
+“Hi, I’m [name of each participant]. Our app is CivicSignal. It is for residents in communities with a configured receiving organization, and the staff who record report updates. It helps residents report a non-emergency issue and follow the status and updates recorded in the app.”
 
 **0:15–0:35 — Problem**  
 “Submitting a report is only the first step. People also need to understand whether it reached anyone and what changed afterward. CivicSignal focuses on that transparency. It is not a government service or an emergency channel.”
 
 **0:35–1:05 — Resident report**  
-Show the fictional resident account and enter the synthetic pothole report. “The category routes this to the organization configured by the administrator. The app returns a reference so the resident can reopen the saved report.”
+Show the fictional resident account and enter the synthetic pothole report. The app requires a photo in this version. If the server API key is configured and the deployment's audience/purpose meets Google's terms, request photo suggestions, explain that the resident may edit or ignore them, and demonstrate that they are applied only after a separate choice. “I choose the issue category; the administrator has connected it to this receiving organization. The app returns a reference so a guest can reopen the report with a private link.”
 
 **1:05–1:35 — Official action**  
 Switch to the fictional verified staff account. Claim the report, change its status, and post an update. “These actions are checked by the API against the staff role and organization, then recorded as report history.”
@@ -81,7 +82,7 @@ The student should say the closing AI disclosure accurately and keep the recordi
 
 ## AI-assistance disclosure draft
 
-> I used OpenAI Codex as an AI coding assistant during development. For the October 22, 2026 engineering pass, Codex inspected this repository and generated or modified code and documentation for API cache headers, static metadata assets, the public landing and privacy/terms pages, report-status guidance, image-signature validation, private Vercel Blob handling, rate limiting, tests, and submission materials. I reviewed the generated changes and [describe the specific lines or behaviors you personally checked, changed, ran, and can explain]. Earlier AI assistance, if any, was [describe accurately]. I did not use AI to create user research, statistics, endorsements, municipal integrations, or test results. The application was tested using [actual commands and results after final review].
+> I used OpenAI Codex as an AI coding assistant during development. For the October 22–23, 2026 engineering passes, Codex inspected this repository and generated or modified code and documentation for API cache headers, static metadata assets, the public landing, About, privacy and terms pages, report-status guidance, image-signature validation, private Vercel Blob handling, rate limiting, tests, submission materials, and the photo-analysis request flow. Codex updated the Gemini model identifier from deprecated Gemini 3.5 Flash to Gemini 3.6 Flash and made the feature available automatically when `GEMINI_API_KEY` is configured, with an emergency disable switch. I reviewed the generated changes and [STUDENT: describe the specific lines or behaviors you personally checked, changed, ran, and can explain—for example, "the photo-suggestion button in ReportCreatePage.tsx, the isPhotoAnalysisConfigured() check in ai-photo-analyzer.ts, and the test that verifies suggestions are optional"]. Earlier AI assistance and any other AI tools used, if any, were [STUDENT: describe accurately or state "none"]. I did not use AI to create user research, statistics, endorsements, municipal integrations, or test results. The application was tested using [STUDENT: actual commands and results—for example, "pnpm test, which passed all 68 tests on October 23, 2026"].
 
 Before submission, replace the bracketed text with the student's actual contribution. Do not claim the AI-generated code was independently written by the student. The rules require significant student effort and technical understanding; the student should review, run, modify, and be able to explain the code they submit.
 
@@ -115,7 +116,7 @@ The API tests create temporary SQLite databases and synthetic accounts in a temp
 The app has no verified municipal integration, no public aggregate statistics, no service-level response-time guarantee, and no published operator/support contact or retention schedule. Production photo bucket access and a full authenticated production workflow have not been verified in this workspace. Vercel rate limits are per function instance, not a globally coordinated abuse-control system.
 
 **What does the app use AI for?**
-When the deployment operator configures `GEMINI_API_KEY`, Google Gemini analyzes a selected issue photo and suggests a description and configured category. Residents can edit the result; it does not automatically route or submit a report. Public statistics remain disabled because they would require explicit privacy thresholds and eligible data; no external-data integration is claimed.
+Gemini photo suggestions become available when `GEMINI_API_KEY` is configured; `DISABLE_GEMINI_PHOTO_ANALYSIS=true` turns them off. The owner identifies CivicSignal's intended users as adults, and the Terms state an 18+ eligibility rule. Google's current API terms also require the API user to be 18+, restrict apps likely to be accessed by minors, and specify professional/business purpose. This intended-audience statement is not age verification; the deployment operator must verify actual use and API eligibility. In an eligible deployment, a resident explicitly requests analysis and separately applies suggestions; category-to-organization mapping remains administrator-configured. Public statistics remain disabled because they would require explicit privacy thresholds and eligible data; no external-data integration is claimed.
 
 ## Scorecard · evidence and remaining gaps
 
@@ -140,3 +141,10 @@ These are self-assessment estimates, not official judging outcomes or security c
 - Student reviews and can explain the generated authentication, authorization, storage, validation, database, and test code.
 - Fill the AI disclosure with the student's own contribution and include any prior AI use.
 - Provide the source code and demo access only in a way that does not expose production credentials or real user data.
+
+## Demo script note for the student
+
+In the demo script above, replace bracketed placeholders with your actual information:
+- [name] with your name
+- [accurate list] with the specific AI tools you used and what they helped with
+- [describe only work you reviewed, modified, tested, and understand] with concrete examples like "ran pnpm test, completed first-run setup, created a test organization and report, and reviewed the authentication flow in server/app.ts"

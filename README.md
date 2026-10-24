@@ -36,7 +36,8 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `DATABASE_PATH` | SQLite file for local development (default `./data/civicsignal.db`). |
 | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
 | `SESSION_TTL_DAYS` | Local session expiry in days (local entry defaults to 14). |
-| `GEMINI_API_KEY` | Optional server-only Google Gemini API key for photo analysis. Uses Gemini 3.5 Flash with image support. Add it to Vercel's environment settings to enable AI suggestions; never use a `VITE_` or `NEXT_PUBLIC_` prefix. |
+| `GEMINI_API_KEY` | Optional server-only Google Gemini API key. Photo suggestions are available automatically when this key is set; never use a `VITE_` or `NEXT_PUBLIC_` prefix. The deployment operator must verify the audience and API use meet Google's current terms. |
+| `DISABLE_GEMINI_PHOTO_ANALYSIS` | Optional emergency switch. Set to `true` to disable suggestions even when `GEMINI_API_KEY` is configured; unset by default. |
 | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |
 | `DB_PASSWORD` | Alternative for the configured Supabase database host; the server builds a TLS-enabled Postgres URL. |
 | `PHOTO_STORAGE` | Production provider: `database`, `supabase`, or `blob`. Without cloud storage credentials, photos use the private `report_photos` table in Postgres. |
@@ -70,4 +71,33 @@ pnpm build
 
 ## Safe judge demo
 
-Use local SQLite rather than the public deployment. Create the admin through first-run setup, configure a fictional public-service organization and issue category, verify a staff account, then submit a fictional road or park issue as a resident. Show the report reference, status guidance, an official update, and the actor-and-time history after moving the status. Do not place credentials in source code or use real resident data. The detailed sequence and submission drafts are in [docs/CAC-SUBMISSION-PACKAGE.md](docs/CAC-SUBMISSION-PACKAGE.md).
+Use local SQLite rather than the public deployment. Create the admin through first-run setup, configure a clearly fictional organization and issue category, verify a fictional staff account, then submit a fictional road or park issue as a resident. If the server API key is configured and the operator has verified that the use meets Google's terms, demonstrate the photo-suggestion request and let the resident decide whether to apply it. Show the report reference, status guidance, a staff update, and the actor-and-time history after moving the status. Do not place credentials in source code or use real resident data. The detailed sequence and submission drafts are in [docs/CAC-SUBMISSION-PACKAGE.md](docs/CAC-SUBMISSION-PACKAGE.md). The reusable [explainer prompt](docs/AI-EXPLAINER-PROMPT.md) and [challenge-improvement prompt](docs/AI-CHALLENGE-IMPROVEMENT-PROMPT.md) are in `docs/`.
+
+## Student contribution checklist for the Congressional App Challenge
+
+Before submitting, review and be prepared to explain these areas to demonstrate your personal effort and technical understanding:
+
+**Code areas to study:**
+- `server/database-sqlite.ts` and `server/database-postgres.ts` - how the dual database adapters work
+- `shared/contracts.ts` - the shared status policy and type definitions
+- `server/app.ts` routes - how authentication and authorization are enforced
+- `server/ai-photo-analyzer.ts` - how Gemini integration works when configured
+- Test files in `tests/` - how the test suite verifies behavior
+
+**What to demonstrate you personally did:**
+- Ran the app locally with `pnpm dev` and completed first-run setup
+- Created an organization, category, staff account, and submitted a test report
+- Observed the report history, status changes, and timeline display
+- Ran `pnpm test` and saw the tests pass
+- Reviewed the authentication flow (session cookies, bcrypt hashing)
+- Read the privacy and terms pages to understand data handling
+
+**What AI tools assisted with (disclose accurately):**
+- [Fill in: which AI tools you used, when, and for what specific code/features]
+- [Example: "OpenAI Codex helped with photo-suggestion UI changes and test updates on October 22-23, 2026. I reviewed the changes and can explain the photo-analysis request flow."]
+
+**What you must not claim:**
+- You wrote all the code yourself if AI generated substantial portions
+- The app has verified municipal partnerships or government endorsement
+- Real users, user counts, or impact statistics
+- Deployed production infrastructure verified from Vercel credentials

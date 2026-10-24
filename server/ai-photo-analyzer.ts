@@ -1,7 +1,7 @@
 import type { PhotoAnalysisResult } from "../shared/contracts.js";
 import { ApiError } from "./http.js";
 
-const GEMINI_MODEL = "gemini-3.5-flash";
+const GEMINI_MODEL = "gemini-3.6-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const ISSUE_TYPES = [
   "Roads and Sidewalks",
@@ -22,7 +22,10 @@ interface GeminiResponse {
 }
 
 export function isPhotoAnalysisConfigured(): boolean {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
+  return Boolean(
+    process.env.GEMINI_API_KEY?.trim() &&
+    process.env.DISABLE_GEMINI_PHOTO_ANALYSIS?.trim().toLowerCase() !== "true",
+  );
 }
 
 /** Prepare factual issue suggestions from a photo. The filename is not sent to the provider. */
@@ -32,7 +35,7 @@ export async function detectProblemInPhoto(
   availableCategories: string[] = [],
 ): Promise<PhotoAnalysisResult> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
+  if (!apiKey || !isPhotoAnalysisConfigured()) {
     throw new ApiError(
       503,
       "AI_NOT_CONFIGURED",

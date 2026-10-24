@@ -509,6 +509,23 @@ p {
   gap: 0.9rem;
 }
 
+.photo-ai-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfcfa;
+}
+
+.photo-ai-controls p {
+  max-width: 52ch;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .location-action {
   display: flex;
   flex-direction: column;

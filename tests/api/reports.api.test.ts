@@ -461,6 +461,7 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
     const { residentAgent } = await scenario();
     const png = Buffer.from(PNG_BASE64, "base64");
     vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    vi.stubEnv("DISABLE_GEMINI_PHOTO_ANALYSIS", "false");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ text: JSON.stringify({

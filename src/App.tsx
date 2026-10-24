@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { useAuth } from "./lib/auth";
 import { useAction } from "./lib/hooks";
+import { AboutPage } from "./pages/AboutPage";
 import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
 import { LandingPage } from "./pages/LandingPage";
@@ -99,6 +100,7 @@ export default function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
+        <Route path="/about" element={<AboutPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
         <Route path="/setup" element={<SetupPage />} />

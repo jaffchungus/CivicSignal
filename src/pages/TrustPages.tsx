@@ -12,8 +12,8 @@ export function PrivacyPage() {
         <li>Account display name and email address. Passwords are stored as password hashes, not as readable passwords.</li>
         <li>A session cookie in your browser; the server stores a hash of the session token and an expiry time.</li>
         <li>Report issue type, optional summary and details, exact location, status history, official updates, and related notifications.</li>
-        <li>An optional photo, if you choose to upload one. Text drafts are stored in this browser; selected photos are not saved in drafts.</li>
-        <li>If photo suggestions are available, a selected photo may be sent to an external image-processing service to prepare suggested report details, even if you cancel before submitting. Avoid sensitive information in photos.</li>
+        <li>A photo is required by the current report form. Text drafts are stored in this browser; selected photos are not saved in drafts.</li>
+        <li>If Gemini photo suggestions are configured, choosing “Generate optional photo suggestions” sends the selected photo to Google even if you cancel before submitting. Selecting a photo alone does not send it. The deployment operator's Google billing status controls Google's data-use terms. Do not send sensitive or confidential images; review <Link to="/terms">CivicSignal's eligibility terms</Link> and the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
         <li>If you use the current-location button, your device coordinates are sent to the configured address lookup service to find a readable address. The coordinates are not included in the report; the returned address is editable before submission.</li>
         <li>For a report sent without an account, a random secure tracking token is issued. The server stores only its hash. The link grants access to that report for 90 days.</li>
       </ul>
@@ -41,6 +41,9 @@ export function TermsPage() {
       <p className="eyebrow">CivicSignal · plain-language notice</p>
       <h1>Terms and limitations</h1>
       <p>CivicSignal is an independent, nonpartisan community-reporting project. It is not a government agency, 311 service, or official public record, and no government endorsement or integration is represented.</p>
+
+      <h2>Eligibility</h2>
+      <p>CivicSignal is intended for adults aged 18 and older. By using this service, you confirm that you are at least 18 years old. People under 18 may not use it. Optional photo suggestions use a third-party AI service when enabled by the deployment operator. The operator is responsible for ensuring that its use of that service, including the audience and purpose, meets the provider's current terms.</p>
 
       <h2>Use it for non-emergency issues only</h2>
       <p>CivicSignal is not continuously monitored and cannot dispatch emergency help. If someone is in immediate danger, call 911. For urgent local service, use the responsible organization's established public contact channels.</p>

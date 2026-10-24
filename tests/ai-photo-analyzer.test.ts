@@ -29,6 +29,7 @@ const successfulResponse = {
 describe("Gemini photo analysis", () => {
   beforeEach(() => {
     vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    vi.stubEnv("DISABLE_GEMINI_PHOTO_ANALYSIS", "false");
   });
 
   afterEach(() => {
@@ -50,7 +51,7 @@ describe("Gemini photo analysis", () => {
     const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
     const requestBody = JSON.parse(String(options.body));
 
-    expect(url).toContain("/models/gemini-3.5-flash:generateContent");
+    expect(url).toContain("/models/gemini-3.6-flash:generateContent");
     expect(url).not.toContain("test-gemini-key");
     expect(options.headers).toMatchObject({
       "Content-Type": "application/json",

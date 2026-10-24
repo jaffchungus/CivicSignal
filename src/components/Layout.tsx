@@ -28,10 +28,12 @@ export function Layout() {
 
   useEffect(() => {
     const path = location.pathname;
-    const page = path === "/privacy"
-      ? { title: "Privacy", description: "What CivicSignal stores, who can access a report, and the limitations of this demo deployment." }
-      : path === "/terms"
-        ? { title: "Terms and limitations", description: "CivicSignal is an independent, non-emergency community-reporting project." }
+    const page = path === "/about"
+      ? { title: "About", description: "How CivicSignal records non-emergency reports, updates, and status history, plus the limits of this prototype." }
+      : path === "/privacy"
+        ? { title: "Privacy", description: "What CivicSignal stores, who can access a report, and the limitations of this demo deployment." }
+        : path === "/terms"
+          ? { title: "Terms and limitations", description: "CivicSignal is an independent, non-emergency community-reporting project." }
         : path === "/signin"
           ? { title: "Sign in", description: "Sign in to submit a non-emergency community report or follow an existing report." }
           : path === "/signup"
@@ -48,7 +50,7 @@ export function Layout() {
                       ? { title: "Report details", description: "View the recorded status, official updates, and history for a CivicSignal report." }
                       : user
                         ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
-                        : { title: "Community issue reporting", description: "Report a neighborhood issue and see what happens next. CivicSignal is not an emergency service." };
+                        : { title: "Community issue reporting", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
     document.title = `${page.title} · CivicSignal`;
     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
     if (description) description.content = page.description;
@@ -127,7 +129,7 @@ export function Layout() {
       <footer className="footer">
         <strong>Not for emergencies.</strong> CivicSignal is not monitored as an emergency
         service. If someone is in immediate danger, call 911.
-        <span className="footer-links"><Link to="/privacy">Privacy</Link><Link to="/terms">Terms and limitations</Link></span>
+        <span className="footer-links"><Link to="/about">About</Link><Link to="/privacy">Privacy</Link><Link to="/terms">Terms and limitations</Link></span>
       </footer>
     </div>
   );

@@ -64,41 +64,28 @@ export function ReportCreatePage() {
   const { data: locationLookupInfo } = useFetch<LocationLookupInfo>("/api/location/attribution");
   const { pending, error, fieldErrors, run } = useAction();
 
-  async function handlePhotoChange(file: File | null) {
-    const requestId = ++photoAnalysisRequestId.current;
+  function handlePhotoChange(file: File | null) {
+    photoAnalysisRequestId.current += 1;
     setPhoto(file);
     setPhotoError(null);
     setAnalysisResult(null);
     setAnalysisMessage(null);
-    if (!file) {
-      setAnalyzingPhoto(false);
-      return;
-    }
+    setAnalyzingPhoto(false);
+  }
 
+  async function requestPhotoSuggestions() {
+    if (!photo) return;
+    const requestId = ++photoAnalysisRequestId.current;
+    setAnalysisResult(null);
+    setAnalysisMessage(null);
     setAnalyzingPhoto(true);
     try {
       const payload = new FormData();
-      payload.set("photo", file);
+      payload.set("photo", photo);
       const res = await api.postForm<{ analysis: PhotoAnalysisResult }>("/api/reports/analyze-photo", payload);
       if (photoAnalysisRequestId.current !== requestId) return;
       setAnalysisResult(res.analysis);
       setAnalysisMessage(null);
-      setForm((current) => {
-        let matchedCatId = current.categoryId;
-        if (!matchedCatId && res.analysis.suggestedCategoryName && categories.length > 0) {
-          const matched = categories.find((c) =>
-            c.name.toLowerCase().includes(res.analysis.suggestedCategoryName.toLowerCase()) ||
-            res.analysis.suggestedCategoryName.toLowerCase().includes(c.name.toLowerCase()),
-          );
-          if (matched) matchedCatId = matched.id;
-        }
-        return {
-          ...current,
-          title: current.title || res.analysis.suggestedTitle,
-          description: current.description || res.analysis.suggestedDescription,
-          categoryId: matchedCatId,
-        };
-      });
     } catch (error) {
       if (photoAnalysisRequestId.current !== requestId) return;
       setAnalysisMessage(error instanceof ApiRequestError && error.code === "INVALID_IMAGE_CONTENT"
@@ -146,7 +133,10 @@ export function ReportCreatePage() {
     identityRef.current = identity;
     setForm(emptyDraft);
     setPhoto(null);
+    setPhotoError(null);
     setAnalyzingPhoto(false);
+    setAnalysisResult(null);
+    setAnalysisMessage(null);
     setStep("details");
     setHasDraft(false);
   }, [identity]);
@@ -212,6 +202,7 @@ export function ReportCreatePage() {
   const chosenCategory = categories.find((category) => category.id === form.categoryId);
   const routingUnavailable = !categoriesLoading && !categoriesError && categories.length === 0;
   const photoStorageUnavailable = routingReadiness?.photoStorage?.status === "unavailable";
+  const photoAnalysisConfigured = routingReadiness?.photoClassification?.status === "configured";
   const coordinatesEntered = isCoordinateOnlyLocation(form.location);
 
   useEffect(() => {
@@ -230,9 +221,9 @@ export function ReportCreatePage() {
     <section className="card report-composer">
       <div className="page-header">
         <div>
-          <p className="eyebrow">See it. Snap it. Help fix it.</p>
+          <p className="eyebrow">Non-emergency community report</p>
           <h1>Report a local issue</h1>
-          <p className="muted">A photo of the issue is required. Include a street address, intersection, or landmark so staff can find it.</p>
+          <p className="muted">A photo is required in this version. Choose a category and enter a street address, intersection, or landmark.</p>
         </div>
         <span className="step-indicator" aria-label={step === "details" ? "Step 1 of 2" : "Step 2 of 2"}>
           {step === "details" ? "1 of 2" : "2 of 2"}
@@ -262,7 +253,7 @@ export function ReportCreatePage() {
       )}
       {routingReadiness?.photoClassification?.status === "unavailable" && (
         <p className="muted routing-limit" role="note">
-          Photo suggestions are unavailable. You can enter the issue details manually.
+          Optional AI photo suggestions are not configured here. Enter the report details yourself.
         </p>
       )}
       {photoStorageUnavailable && (
@@ -277,7 +268,7 @@ export function ReportCreatePage() {
             <div className="report-action-grid">
               <Field
                 label="Photo (required)"
-                hint="Photo limit: 4 MiB. If photo suggestions are available, your photo may be sent to an external image-processing service. Avoid sensitive details and review any suggestions."
+                hint="Maximum 4 MiB. If you submit, this photo is shared with the configured organization and authorized staff. It is sent to Google Gemini only if you choose to generate AI suggestions below. Avoid sensitive details."
                 error={photoError ?? undefined}
               >
                 <input
@@ -305,6 +296,29 @@ export function ReportCreatePage() {
                 />
               </Field>
               {photo && <p className="muted" role="status">Selected: {photo.name}</p>}
+              {photo && (
+                <div className="photo-ai-controls">
+                  {photoAnalysisConfigured ? (
+                    <button
+                      className="button"
+                      type="button"
+                      disabled={analyzingPhoto}
+                      onClick={() => void requestPhotoSuggestions()}
+                    >
+                      {analyzingPhoto ? "Preparing suggestions…" : analysisResult ? "Generate suggestions again" : "Generate optional photo suggestions"}
+                    </button>
+                  ) : routingReadiness?.photoClassification?.status === "unavailable" ? (
+                    <p className="muted" role="status">AI photo suggestions are not enabled here. Enter the report details yourself.</p>
+                  ) : (
+                    <p className="muted" role="status">Checking whether optional photo suggestions are available…</p>
+                  )}
+                  {photoAnalysisConfigured && (
+                    <p className="muted">
+                      This sends the selected photo to Google Gemini. The deployment’s billing and data-use terms are not shown here; do not send sensitive or confidential images. Nothing is applied until you choose Apply. <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="location-action">
                 <strong>Enter the precise location</strong>
                 <p className="muted">Type an address, intersection, or landmark, or use your device location to fill in an editable address.</p>
@@ -322,7 +336,7 @@ export function ReportCreatePage() {
 
             {analyzingPhoto && (
               <div className="card ai-card analyzing" role="status">
-                <span>Preparing photo suggestions…</span>
+                <span>Sending the photo for suggestions…</span>
               </div>
             )}
 
@@ -344,10 +358,10 @@ export function ReportCreatePage() {
                   className="button button-sm ai-apply-button"
                   type="button"
                   onClick={() => {
-                    const matched = categories.find((c) =>
-                      c.name.toLowerCase().includes(analysisResult.suggestedCategoryName.toLowerCase()) ||
-                      analysisResult.suggestedCategoryName.toLowerCase().includes(c.name.toLowerCase()),
-                    );
+                    const suggestedCategoryName = analysisResult.suggestedCategoryName.trim().toLocaleLowerCase();
+                    const matched = suggestedCategoryName
+                      ? categories.find((category) => category.name.trim().toLocaleLowerCase() === suggestedCategoryName)
+                      : undefined;
                     setForm((current) => ({
                       ...current,
                       title: analysisResult.suggestedTitle,
@@ -453,7 +467,7 @@ export function ReportCreatePage() {
             </dl>
             <div className="privacy-summary">
               <strong>Privacy</strong>
-              <p>Your photo, location, and details are shared with the receiving organization and authorized CivicSignal staff for this report. If photo suggestions are available, your selected photo may also be sent to an external image-processing service, even if you later cancel this report. This report is not publicly listed. Keep the secure tracking link private.</p>
+              <p>Your photo, location, and details are shared with the receiving organization and authorized CivicSignal staff if you submit. {photoAnalysisConfigured && <>If you choose Generate photo suggestions, the photo is sent to Google Gemini for analysis even if you later cancel. </>}This report is not publicly listed. Keep the secure tracking link private.</p>
               {!user && <p>No account is needed. A secure, one-time tracking link will be shown after submission; save it to return to your report.</p>}
             </div>
             {error && <p className="error" role="alert">{error}</p>}
