@@ -90,7 +90,7 @@ export function ReportCreatePage() {
       if (photoAnalysisRequestId.current !== requestId) return;
       setAnalysisMessage(error instanceof ApiRequestError && error.code === "INVALID_IMAGE_CONTENT"
         ? "Choose a valid image file. You can enter the issue details manually."
-        : "Photo suggestions are unavailable right now. You can enter the issue details manually.");
+        : "Description is unavailable right now. You can enter the issue details manually.");
     } finally {
       if (photoAnalysisRequestId.current === requestId) setAnalyzingPhoto(false);
     }
@@ -253,7 +253,7 @@ export function ReportCreatePage() {
       )}
       {routingReadiness?.photoClassification?.status === "unavailable" && (
         <p className="muted routing-limit" role="note">
-          Optional AI photo suggestions are not configured here. Enter the report details yourself.
+          Optional AI description is not configured here. Enter the report details yourself.
         </p>
       )}
       {photoStorageUnavailable && (
@@ -305,17 +305,12 @@ export function ReportCreatePage() {
                       disabled={analyzingPhoto}
                       onClick={() => void requestPhotoSuggestions()}
                     >
-                      {analyzingPhoto ? "Preparing suggestions…" : analysisResult ? "Generate suggestions again" : "Generate optional photo suggestions"}
+                      {analyzingPhoto ? "Preparing description…" : analysisResult ? "Generate description again" : "Generate optional description"}
                     </button>
                   ) : routingReadiness?.photoClassification?.status === "unavailable" ? (
-                    <p className="muted" role="status">AI photo suggestions are not enabled here. Enter the report details yourself.</p>
+                    <p className="muted" role="status">AI description is not enabled here. Enter the report details yourself.</p>
                   ) : (
-                    <p className="muted" role="status">Checking whether optional photo suggestions are available…</p>
-                  )}
-                  {photoAnalysisConfigured && (
-                    <p className="muted">
-                      This sends the selected photo to Google Gemini. The deployment’s billing and data-use terms are not shown here; do not send sensitive or confidential images. Nothing is applied until you choose Apply. <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.
-                    </p>
+                    <p className="muted" role="status">Checking whether optional description is available…</p>
                   )}
                 </div>
               )}
@@ -336,19 +331,19 @@ export function ReportCreatePage() {
 
             {analyzingPhoto && (
               <div className="card ai-card analyzing" role="status">
-                <span>Sending the photo for suggestions…</span>
+                <span>Sending the photo for description…</span>
               </div>
             )}
 
             {analysisResult && (
-              <div className="card ai-card" role="region" aria-label="Photo suggestions">
+              <div className="card ai-card" role="region" aria-label="Description">
                 <div className="ai-card-header">
-                  <span className="badge ai-badge">Photo suggestions</span>
+                  <span className="badge ai-badge">Description</span>
                 </div>
                 <p className="ai-problem-text">
                   <strong>Possible issue:</strong> {analysisResult.problem}
                 </p>
-                <p className="muted">These suggestions can be wrong. Confirm the issue type, title, and details before submitting.</p>
+                <p className="muted">This description can be wrong. Confirm the issue type, title, and details before submitting.</p>
                 {analysisResult.detectedCues && analysisResult.detectedCues.length > 0 && (
                   <p className="muted ai-cues">
                     <strong>Visual cues:</strong> {analysisResult.detectedCues.join(" · ")}
@@ -370,7 +365,7 @@ export function ReportCreatePage() {
                     }));
                   }}
                 >
-                  Apply suggested title, category & details
+                  Apply description
                 </button>
               </div>
             )}

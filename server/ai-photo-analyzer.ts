@@ -1,7 +1,7 @@
 import type { PhotoAnalysisResult } from "../shared/contracts.js";
 import { ApiError } from "./http.js";
 
-const GEMINI_MODEL = "gemini-3.6-flash";
+const GEMINI_MODEL = "gemini-3.5-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const ISSUE_TYPES = [
   "Roads and Sidewalks",
