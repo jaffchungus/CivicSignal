@@ -168,6 +168,7 @@ export type PhotoAnalysisResult = {
   suggestedDescription: string;
   confidence: number;
   detectedCues: string[];
+  isSpam: boolean;
 };
 
 export type Notification = {

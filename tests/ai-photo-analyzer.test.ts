@@ -18,6 +18,7 @@ const successfulResponse = {
               suggestedDescription: "A pothole is visible in the roadway.",
               confidence: 0.91,
               detectedCues: ["Broken asphalt", "Road surface depression"],
+              isSpam: false,
             }),
           },
         ],
@@ -82,6 +83,7 @@ describe("Gemini photo analysis", () => {
       suggestedDescription: "A pothole is visible in the roadway.",
       confidence: 0.91,
       detectedCues: ["Broken asphalt"],
+      isSpam: false,
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify(invalidCategoryResponse), { status: 200 }),
@@ -103,5 +105,30 @@ describe("Gemini photo analysis", () => {
 
     await expect(detectProblemInPhoto(Buffer.from("image"), "image/png"))
       .rejects.toMatchObject({ status: 503, code: "AI_PROVIDER_UNAVAILABLE" });
+  });
+
+  it("detects spam images", async () => {
+    const spamResponse = structuredClone(successfulResponse);
+    spamResponse.candidates[0].content.parts[0].text = JSON.stringify({
+      problem: "A meme image with text overlay",
+      detectedIssueType: "Roads and Sidewalks",
+      suggestedCategoryName: "Roads and Sidewalks",
+      suggestedTitle: "Meme image",
+      suggestedDescription: "This appears to be a meme or unrelated content.",
+      confidence: 0.5,
+      detectedCues: ["Text overlay", "Meme format"],
+      isSpam: true,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(spamResponse), { status: 200 }),
+    ));
+
+    const result = await detectProblemInPhoto(
+      Buffer.from("image"),
+      "image/png",
+      ["Roads and Sidewalks"],
+    );
+
+    expect(result.isSpam).toBe(true);
   });
 });

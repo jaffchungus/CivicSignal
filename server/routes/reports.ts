@@ -406,7 +406,7 @@ export function createReportsRouter(deps: {
   const router = Router();
   const reportCreationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    limit: 10,
+    limit: 5,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: { code: "RATE_LIMITED", message: "Too many reports were submitted from this connection. Wait before sending another report." } },

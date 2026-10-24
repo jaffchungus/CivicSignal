@@ -1,6 +1,6 @@
 # CivicSignal
 
-CivicSignal is an independent, nonpartisan community-reporting app. Residents can submit non-emergency issues, see which configured organization received them, and follow the status, official updates, and recorded history. It is not a 311 integration, a government record system, or an emergency service.
+CivicSignal is a civic app that helps solve community issues. Residents can submit non-emergency issues, see which configured organization received them, and follow the status, official updates, and recorded history. It is not a 311 integration, a government record system, or an emergency service.
 
 ## Architecture
 

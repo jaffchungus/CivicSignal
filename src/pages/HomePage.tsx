@@ -21,9 +21,10 @@ function ResidentHome() {
     <section>
       <div className="page-header">
         <div>
+          <p className="eyebrow">Congressional App Challenge App</p>
           <h1>Your reports</h1>
           <p className="muted">
-            Track the community issues you have submitted and any responses from local
+            Track the community issues you have submitted with this civic app and any responses from local
             public-service organizations.
           </p>
         </div>
@@ -44,7 +45,7 @@ function ResidentHome() {
           <h2>No reports yet</h2>
           <p className="muted">
             Potholes, broken streetlights, sanitation problems, park maintenance — if it
-            is a non-emergency community issue, report it here and follow what happens.
+            is a non-emergency community issue, use this civic app to report it and follow what happens.
           </p>
           <Link className="button primary" to="/reports/new">
             Report your first issue

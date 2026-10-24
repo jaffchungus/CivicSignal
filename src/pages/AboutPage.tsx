@@ -4,9 +4,9 @@ export function AboutPage() {
   return (
     <article className="card legal-page">
       <p className="eyebrow">Project overview · 2026 Congressional App Challenge, NJ-05</p>
-      <h1>About CivicSignal</h1>
+      <h1>About this civic app</h1>
       <p className="muted">
-        CivicSignal is an independent prototype about what happens after a non-emergency community issue is reported. A resident can submit a report to an organization configured for the selected category, then view the status and updates recorded in CivicSignal.
+        This civic app helps solve community issues by making it easy to report non-emergency problems. A resident can submit a report to an organization configured for the selected category, then view the status and updates recorded in the app.
       </p>
 
       <h2>Who it is for</h2>
@@ -27,9 +27,9 @@ export function AboutPage() {
         <li><strong>Understand the record:</strong> A status such as “Resolved” reflects what staff recorded in CivicSignal. It is not an independent inspection or proof that a public agency completed work.</li>
       </ul>
 
-      <h2>Optional AI photo suggestions</h2>
+      <h2>Automatic AI description</h2>
       <p>
-        When the deployment has configured Gemini photo analysis, a resident may request suggestions after selecting a photo; that image is sent even if the resident later cancels. Suggestions can be wrong, do not submit a report or choose its receiving organization, and are applied only after the resident chooses Apply. Google's data-use terms depend on the billing status of the project, which CivicSignal does not display. Do not send sensitive or confidential images; review the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a> and CivicSignal's <Link to="/terms">eligibility terms</Link>. If photo analysis is unavailable, report details can be entered manually.
+        When the deployment has configured Gemini photo analysis, the app automatically generates a description when a photo is selected. The AI also detects and blocks spam images. If photo analysis is unavailable, report details can be entered manually.
       </p>
 
       <p>

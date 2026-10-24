@@ -61,8 +61,8 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
     <section className="landing">
       <div className="landing-hero">
         <div className="landing-copy">
-          <p className="eyebrow">Non-emergency community reporting</p>
-          <h1>Submit an issue. Follow the record.</h1>
+          <p className="eyebrow">Congressional App Challenge App</p>
+          <h1>A civic app to help solve community issues</h1>
           <p className="landing-lede">
             Choose a category, describe the issue, and see the status changes, official updates, and action history recorded for your report.
           </p>
@@ -86,7 +86,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
           </div>
           <ol className="journey-list">
             <li><span>1</span><div><strong>Choose a category</strong><small>An administrator connects each category to a receiving organization.</small></div></li>
-            <li><span>2</span><div><strong>Submit your report</strong><small>This version requires a photo. Enter the details yourself, or request optional AI suggestions if configured.</small></div></li>
+            <li><span>2</span><div><strong>Submit your report</strong><small>This version requires a photo. AI automatically generates the description if configured.</small></div></li>
             <li><span>3</span><div><strong>Follow the history</strong><small>See status changes, official updates, and who recorded each action—all in one place.</small></div></li>
           </ol>
           <div className="landing-panel-foot"><Eye aria-hidden="true" size={16} /> A “Resolved” status is what staff recorded; CivicSignal does not independently inspect the work.</div>
