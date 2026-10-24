@@ -459,6 +459,8 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
 
   it("detects the problem in an uploaded photo using AI logic via /api/reports/analyze-photo", async () => {
     const { residentAgent } = await scenario();
+    const { body: { categories } } = await residentAgent.get("/api/categories").expect(200);
+    const roads = categoryByName(categories, "Roads and Sidewalks");
     const png = Buffer.from(PNG_BASE64, "base64");
     vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
     vi.stubEnv("DISABLE_GEMINI_PHOTO_ANALYSIS", "false");
@@ -466,8 +468,7 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
       new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ text: JSON.stringify({
           problem: "A pothole is visible in the road.",
-          detectedIssueType: "Roads and Sidewalks",
-          suggestedCategoryName: "Roads and Sidewalks",
+          suggestedCategoryId: roads.id,
           suggestedTitle: "Pothole in roadway",
           suggestedDescription: "A pothole is visible in the roadway.",
           confidence: 0.91,
@@ -486,11 +487,10 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
 
     expect(response.body.analysis).toBeDefined();
     expect(response.body.analysis.problem).toContain("pothole");
-    expect(response.body.analysis.detectedIssueType).toBe("Roads and Sidewalks");
     expect(response.body.analysis.suggestedTitle).toBeDefined();
     expect(response.body.analysis.confidence).toBeGreaterThan(0.7);
     expect(response.body.analysis.detectedCues.length).toBeGreaterThan(0);
-    expect(response.body.analysis.suggestedCategoryName).toBe("Roads and Sidewalks");
+    expect(response.body.analysis.suggestedCategoryId).toBe(roads.id);
   });
 
   it("reports that AI photo analysis needs server configuration", async () => {

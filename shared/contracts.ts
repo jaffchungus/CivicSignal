@@ -163,8 +163,7 @@ export type Report = {
 
 export type PhotoAnalysisResult = {
   problem: string;
-  detectedIssueType: string;
-  suggestedCategoryName: string;
+  suggestedCategoryId: string;
   suggestedTitle: string;
   suggestedDescription: string;
   confidence: number;

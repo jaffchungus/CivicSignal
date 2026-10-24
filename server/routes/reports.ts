@@ -840,16 +840,22 @@ export function createReportsRouter(deps: {
         );
       }
       const categories = (await database
-        .prepare(`SELECT categories.name
+        .prepare(`SELECT categories.id, categories.name, categories.description,
+                         organizations.name AS organizationName
                   FROM categories
                   JOIN organizations ON organizations.id = categories.organization_id
                   WHERE categories.active = 1 AND organizations.active = 1
                   ORDER BY categories.name`)
-        .all()) as Array<{ name: string }>;
+        .all()) as Array<{
+          id: string;
+          name: string;
+          description: string | null;
+          organizationName: string;
+        }>;
       const analysis = await detectProblemInPhoto(
         file.buffer,
         fileContentType,
-        categories.map((category) => category.name),
+        categories,
       );
       response.json({ analysis });
     },

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { Field } from "../components/Field";
@@ -78,43 +78,43 @@ export function ReportCreatePage() {
     setPhoto(file);
     setPhotoError(null);
     setAnalyzingPhoto(false);
-    if (file && photoAnalysisConfigured) {
-      void requestPhotoSuggestions();
-    }
+    setForm((current) => ({ ...current, categoryId: "" }));
   }
 
-  async function requestPhotoSuggestions() {
-    if (!photo) return;
+  const requestPhotoSuggestions = useCallback(async (file: File) => {
     const requestId = ++photoAnalysisRequestId.current;
     setAnalyzingPhoto(true);
     try {
       const payload = new FormData();
-      payload.set("photo", photo);
+      payload.set("photo", file);
       const res = await api.postForm<{ analysis: PhotoAnalysisResult }>("/api/reports/analyze-photo", payload);
       if (photoAnalysisRequestId.current !== requestId) return;
       if (res.analysis.isSpam) {
         setPhotoError("This image appears to be spam and cannot be submitted. Please choose a real photo of a civic issue.");
         setPhoto(null);
         setPhotoPreview(null);
+        setForm((current) => ({ ...current, categoryId: "" }));
         return;
       }
-      const suggestedCategoryName = res.analysis.suggestedCategoryName.trim().toLocaleLowerCase();
-      const matched = suggestedCategoryName
-        ? categories.find((category) => category.name.trim().toLocaleLowerCase() === suggestedCategoryName)
-        : undefined;
       setForm((current) => ({
         ...current,
         title: res.analysis.suggestedTitle,
         description: res.analysis.suggestedDescription,
-        categoryId: matched ? matched.id : current.categoryId,
+        categoryId: res.analysis.suggestedCategoryId,
       }));
+      if (!res.analysis.suggestedCategoryId) {
+        setPhotoError("AI could not match this photo to an active issue category and organization. Choose another photo or try again later.");
+      }
     } catch (error) {
       if (photoAnalysisRequestId.current !== requestId) return;
       console.error("Photo analysis failed:", error);
+      setPhotoError(error instanceof ApiRequestError
+        ? error.message
+        : "AI photo classification failed. Please try another photo or try again later.");
     } finally {
       if (photoAnalysisRequestId.current === requestId) setAnalyzingPhoto(false);
     }
-  }
+  }, []);
 
   function updateLocationFromDevice() {
     const requestId = ++locationRequestId.current;
@@ -255,6 +255,10 @@ export function ReportCreatePage() {
     : null;
 
   useEffect(() => {
+    if (photo && photoAnalysisConfigured) void requestPhotoSuggestions(photo);
+  }, [photo, photoAnalysisConfigured, requestPhotoSuggestions]);
+
+  useEffect(() => {
     if (!photo) {
       setPhotoPreview(null);
       return;
@@ -272,7 +276,7 @@ export function ReportCreatePage() {
         <div>
           <p className="eyebrow">Non-emergency community report</p>
           <h1>Report a local issue</h1>
-          <p className="muted">A photo is required in this version. Choose a category and enter a street address, intersection, or landmark.</p>
+          <p className="muted">A photo is required. AI identifies the issue category and responsible organization; enter a street address, intersection, or landmark.</p>
         </div>
         <span className="step-indicator" aria-label={step === "details" ? "Step 1 of 2" : "Step 2 of 2"}>
           {step === "details" ? "1 of 2" : "2 of 2"}
@@ -297,12 +301,12 @@ export function ReportCreatePage() {
       )}
       {routingReadiness?.jurisdiction?.status === "unavailable" && (
         <p className="muted routing-limit" role="note">
-          Reports are sent to the organization connected to the category you choose. This deployment does not check municipality boundaries or infer a jurisdiction from your location.
+          AI routes reports to the organization connected to its selected category. This deployment does not check municipality boundaries or infer a jurisdiction from your location.
         </p>
       )}
       {routingReadiness?.photoClassification?.status === "unavailable" && (
         <p className="muted routing-limit" role="note">
-          Optional AI description is not configured here. Enter the report details yourself.
+          AI issue classification is required to route reports and is not configured here. You cannot submit a report right now.
         </p>
       )}
       {photoStorageUnavailable && (
@@ -317,7 +321,7 @@ export function ReportCreatePage() {
             <div className="report-action-grid">
               <Field
                 label="Photo (required)"
-                hint="Maximum 4 MiB. This civic app shares your photo with the configured organization and authorized staff when you submit. Avoid sensitive details."
+                hint="Maximum 4 MiB. When AI classification is configured, choosing a photo sends it to Gemini to identify the issue category and responsible organization. On submission, the photo is also shared with that organization and authorized staff. Avoid sensitive details."
                 error={photoError ?? undefined}
               >
                 <div className="photo-upload-section">
@@ -402,8 +406,13 @@ export function ReportCreatePage() {
 
             {analyzingPhoto && (
               <div className="card ai-card analyzing" role="status">
-                <span>Generating description…</span>
+                <span>AI is identifying the issue and responsible organization…</span>
               </div>
+            )}
+            {chosenCategory && !analyzingPhoto && (
+              <p className="muted" role="status">
+                AI selected {chosenCategory.name}; this report will go to {chosenCategory.organizationName}.
+              </p>
             )}
 
             <Field
@@ -425,24 +434,11 @@ export function ReportCreatePage() {
                 maxLength={300}
               />
             </Field>
-            <Field label="Issue type and responsible organization" hint={chosenCategory ? `${chosenCategory.description || "This is the closest configured issue type."} Reports go to ${chosenCategory.organizationName}.` : "Choose an issue type to see which organization will receive your report."} error={fieldErrors.categoryId}>
-              <select
-                className="select"
-                value={form.categoryId}
-                onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
-                disabled={categoriesLoading || Boolean(categoriesError) || categories.length === 0}
-                required
-              >
-                <option value="">{categoriesLoading ? "Loading issue types…" : "Choose an issue type…"}</option>
-                {categories.map((category) => <option key={category.id} value={category.id}>{category.name} — {category.organizationName}</option>)}
-              </select>
-            </Field>
-
             <div className="button-row">
               <button
                 className="button primary"
                 type="button"
-                disabled={!photo || analyzingPhoto || !form.categoryId || (!form.location && !hasPrecisePin) || coordinatesEntered || routingUnavailable || photoStorageUnavailable || categoriesLoading || Boolean(categoriesError)}
+                disabled={!photo || analyzingPhoto || !form.categoryId || (!form.location && !hasPrecisePin) || coordinatesEntered || routingUnavailable || photoStorageUnavailable || categoriesLoading || Boolean(categoriesError) || !photoAnalysisConfigured}
                 onClick={() => {
                   if (!photo) {
                     setPhotoError("A photo of the issue is required before continuing.");
@@ -479,8 +475,8 @@ export function ReportCreatePage() {
                   <dd>{form.latitude!.toFixed(6)}, {form.longitude!.toFixed(6)} · {mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer">Preview map</a>}</dd>
                 </div>
               )}
-              <div><dt>Issue type</dt><dd>{chosenCategory?.name ?? "Not selected"}</dd></div>
-              <div><dt>Receiving organization</dt><dd>{chosenCategory?.organizationName ?? "Not configured"}</dd></div>
+              <div><dt>AI-selected issue type</dt><dd>{chosenCategory?.name ?? "Not classified"}</dd></div>
+              <div><dt>AI-selected responsible organization</dt><dd>{chosenCategory?.organizationName ?? "Not classified"}</dd></div>
             </dl>
             {error && <p className="error" role="alert">{error}</p>}
             <div className="button-row">
