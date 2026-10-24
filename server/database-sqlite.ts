@@ -68,6 +68,9 @@ const SQLITE_SCHEMA = `
       title TEXT NOT NULL,
       description TEXT NOT NULL,
       location TEXT NOT NULL,
+      latitude REAL,
+      longitude REAL,
+      accuracy_meters REAL,
       category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
       reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
@@ -149,6 +152,19 @@ const SQLITE_SCHEMA = `
     CREATE INDEX IF NOT EXISTS notifications_user_idx
       ON notifications(user_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx
+      ON push_subscriptions(user_id);
+
     CREATE TABLE IF NOT EXISTS audit_events (
       id TEXT PRIMARY KEY,
       actor_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
@@ -195,6 +211,16 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
     database.pragma("foreign_keys = ON");
     await retryBusy(() => database.pragma("journal_mode = WAL"));
     await retryBusy(() => database.exec(SQLITE_SCHEMA));
+    const reportColumns = database.pragma("table_info(reports)") as Array<{ name: string }>;
+    if (!reportColumns.some((column) => column.name === "latitude")) {
+      database.exec("ALTER TABLE reports ADD COLUMN latitude REAL");
+    }
+    if (!reportColumns.some((column) => column.name === "longitude")) {
+      database.exec("ALTER TABLE reports ADD COLUMN longitude REAL");
+    }
+    if (!reportColumns.some((column) => column.name === "accuracy_meters")) {
+      database.exec("ALTER TABLE reports ADD COLUMN accuracy_meters REAL");
+    }
     const reporterColumn = (database.pragma("table_info(reports)") as Array<{
       name: string;
       notnull: number;
@@ -209,6 +235,9 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
           title TEXT NOT NULL,
           description TEXT NOT NULL,
           location TEXT NOT NULL,
+          latitude REAL,
+          longitude REAL,
+          accuracy_meters REAL,
           category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
           organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
           reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
@@ -218,7 +247,14 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         );
-        INSERT INTO reports_guest_migration SELECT * FROM reports;
+        INSERT INTO reports_guest_migration
+          (id, reference_code, title, description, location, latitude, longitude, accuracy_meters,
+           category_id, organization_id, reporter_user_id, assigned_user_id,
+           status, moderation_status, created_at, updated_at)
+        SELECT id, reference_code, title, description, location, latitude, longitude, accuracy_meters,
+               category_id, organization_id, reporter_user_id, assigned_user_id,
+               status, moderation_status, created_at, updated_at
+        FROM reports;
         DROP TABLE reports;
         ALTER TABLE reports_guest_migration RENAME TO reports;
         CREATE INDEX reports_reporter_idx ON reports(reporter_user_id, created_at DESC);

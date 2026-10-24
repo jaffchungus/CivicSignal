@@ -12,9 +12,10 @@ export function PrivacyPage() {
         <li>Account display name and email address. Passwords are stored as password hashes, not as readable passwords.</li>
         <li>A session cookie in your browser; the server stores a hash of the session token and an expiry time.</li>
         <li>Report issue type, summary and details, exact location, status history, official updates, and related notifications.</li>
+        <li>If you opt in to system alerts, the app stores this browser or device’s push endpoint and subscription keys on your account. Turn alerts off to remove that device’s subscription.</li>
         <li>A photo is required by the current report form. Text drafts are stored in this browser; selected photos are not saved in drafts.</li>
         <li>If Gemini photo analysis is configured, the selected photo is automatically sent to Google for description generation when you select it. The deployment operator's Google billing status controls Google's data-use terms. Do not send sensitive or confidential images; review <Link to="/terms">CivicSignal's eligibility terms</Link> and the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
-        <li>If you use the current-location button, your device coordinates are sent to the configured address lookup service to find a readable address. The coordinates are not included in the report; the returned address is editable before submission.</li>
+        <li>If you save a GPS pin, its exact coordinates are stored with the report and shown to the authorized organization staff who receive it. The optional address lookup also sends the coordinates to the configured lookup provider. Its suggested address is editable, and a lookup failure does not remove the saved pin.</li>
         <li>For a report sent without an account, a random secure tracking token is issued. The server stores only its hash. The link grants access to that report for 90 days.</li>
       </ul>
 
@@ -22,7 +23,7 @@ export function PrivacyPage() {
       <p>Account holders can see their own reports. A guest report can be viewed by anyone with its private tracking link. Active staff in the configured receiving organization and administrators can access reports for their work. Reports are not listed publicly. Photos and exact locations are shared with those authorized viewers. Account display names appear on account reports; CivicSignal does not ask for contact details on guest reports, and staff report views do not include account email addresses.</p>
 
       <h2>Updates and contact</h2>
-      <p>Account holders receive in-app notifications. Guest reporters follow updates through their private tracking link. This deployment has no configured email or text-message sender, so it does not send those notifications or collect contact details for that purpose.</p>
+      <p>Account holders receive in-app notifications and can opt in to phone or computer alerts on supported browsers. Browser push subscriptions are tied to the account and device; alerts are sent only after the user grants permission. Guest reporters follow updates through their private tracking link. This deployment has no configured email or text-message sender, so it does not send those notifications or collect contact details for that purpose.</p>
 
       <h2>Storage and retention</h2>
       <p>The application writes account and report records to the deployment's configured database. Guest tracking tokens expire after 90 days; report data and photos do not have an automatic deletion schedule in this project. Photos use the configured private storage provider, with a private database-backed fallback. Older deployments may contain legacy public Blob objects; those objects need a provider-side migration before they can be treated as private. This project does not implement account deletion or a resident self-service report deletion tool.</p>

@@ -68,6 +68,9 @@ const POSTGRES_SCHEMA = `
       title TEXT NOT NULL,
       description TEXT NOT NULL,
       location TEXT NOT NULL,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      accuracy_meters DOUBLE PRECISION,
       category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
       reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
@@ -149,6 +152,19 @@ const POSTGRES_SCHEMA = `
     CREATE INDEX IF NOT EXISTS notifications_user_idx
       ON notifications(user_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx
+      ON push_subscriptions(user_id);
+
     CREATE TABLE IF NOT EXISTS audit_events (
       id TEXT PRIMARY KEY,
       actor_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
@@ -202,7 +218,7 @@ const DATA_API_PROTECTION = `
   BEGIN
     FOREACH table_name IN ARRAY ARRAY[
       'settings', 'organizations', 'users', 'sessions', 'categories', 'reports',
-      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'report_photos', 'notifications', 'audit_events'
+      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'report_photos', 'notifications', 'push_subscriptions', 'audit_events'
     ] LOOP
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
       EXECUTE format('REVOKE ALL ON TABLE %I FROM PUBLIC', table_name);
@@ -234,6 +250,9 @@ export async function createPostgresDatabase(connectionString: string): Promise<
     // Concurrent cold starts must not race CREATE TABLE or schema hardening.
     await initializationClient.query("SELECT pg_advisory_xact_lock(1962042917)");
     await initializationClient.query(POSTGRES_SCHEMA);
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS accuracy_meters DOUBLE PRECISION");
     await initializationClient.query("ALTER TABLE reports ALTER COLUMN reporter_user_id DROP NOT NULL");
     await initializationClient.query(DATA_API_PROTECTION);
     await initializationClient.query("COMMIT");

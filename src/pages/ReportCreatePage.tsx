@@ -9,7 +9,14 @@ import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
 import { isCoordinateOnlyLocation } from "../../shared/report-location";
 import type { Category, PhotoAnalysisResult, Report } from "../../shared/contracts";
 
-type Draft = { categoryId: string; title: string; description: string; location: string };
+type Draft = {
+  categoryId: string;
+  title: string;
+  description: string;
+  location: string;
+  latitude: number | null;
+  longitude: number | null;
+};
 type RoutingReadiness = {
   jurisdiction?: { status: string; reason?: string };
   photoClassification?: { status: string; reason?: string };
@@ -22,11 +29,13 @@ type LocationLookupInfo = {
   policyUrl?: string;
   usageNote?: string;
 };
-const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "" };
+const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "", latitude: null, longitude: null };
 
 function readDraft(key: string): Draft {
   try {
-    const draft = { ...emptyDraft, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
+    const draft = { ...emptyDraft, ...JSON.parse(localStorage.getItem(key) ?? "{}") } as Draft;
+    if (typeof draft.latitude !== "number" || draft.latitude < -90 || draft.latitude > 90) draft.latitude = null;
+    if (typeof draft.longitude !== "number" || draft.longitude < -180 || draft.longitude > 180) draft.longitude = null;
     if (isCoordinateOnlyLocation(draft.location)) draft.location = "";
     return draft;
   } catch {
@@ -45,6 +54,7 @@ export function ReportCreatePage() {
   const draftKey = `civicsignal.report-draft.${identity}`;
   const identityRef = useRef(identity);
   const photoAnalysisRequestId = useRef(0);
+  const locationRequestId = useRef(0);
   const [form, setForm] = useState<Draft>(() => readDraft(draftKey));
   const changingIdentity = identityRef.current !== identity;
   const [photo, setPhoto] = useState<File | null>(null);
@@ -54,6 +64,7 @@ export function ReportCreatePage() {
   const [step, setStep] = useState<"details" | "confirm">("details");
   const [locationMessage, setLocationMessage] = useState("");
   const [locationLookupBusy, setLocationLookupBusy] = useState(false);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
   const { data, loading: categoriesLoading, error: categoriesError, reload } =
     useFetch<{ categories: Category[] }>("/api/categories");
@@ -106,7 +117,9 @@ export function ReportCreatePage() {
   }
 
   function updateLocationFromDevice() {
+    const requestId = ++locationRequestId.current;
     setLocationMessage("");
+    setResolvingAddress(false);
     if (!navigator.geolocation) {
       setLocationMessage("This browser cannot share a location. Enter the address, intersection, or landmark manually.");
       return;
@@ -115,29 +128,47 @@ export function ReportCreatePage() {
     setLocationLookupBusy(true);
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        void api.post<{ address: string }>("/api/location/reverse", {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-        }).then(({ address }) => {
-          setForm((current) => ({ ...current, location: address }));
-          setLocationMessage("Address added. Check it and edit it if needed.");
-        }).catch((error: unknown) => {
-          setLocationMessage(error instanceof ApiRequestError
-            ? error.message
-            : "Address lookup is temporarily unavailable. Enter the location manually.");
-        }).finally(() => setLocationLookupBusy(false));
-      },
-      () => {
+        const coordinates = { latitude: coords.latitude, longitude: coords.longitude };
+        setForm((current) => ({
+          ...current,
+          location: "Precise GPS pin attached",
+          ...coordinates,
+        }));
+        setLocationMessage(`Precise pin saved (${coords.latitude.toFixed(6)}, ${coords.longitude.toFixed(6)}). Looking up a nearby address…`);
         setLocationLookupBusy(false);
-        setLocationMessage("We couldn't read your device location. Allow location access or enter the address manually.");
+        setResolvingAddress(true);
+        void api.post<{ address: string }>("/api/location/reverse", {
+          ...coordinates,
+        }).then(({ address }) => {
+          if (locationRequestId.current !== requestId) return;
+          setForm((current) => ({ ...current, location: address }));
+          setLocationMessage("Precise pin saved and nearby address found. Review both before sending.");
+        }).catch((error: unknown) => {
+          if (locationRequestId.current !== requestId) return;
+          setLocationMessage(error instanceof ApiRequestError
+            ? `The precise pin is saved. ${error.message}`
+            : "The precise pin is saved. Address lookup is unavailable; you can still submit or add a street address.");
+        }).finally(() => {
+          if (locationRequestId.current === requestId) setResolvingAddress(false);
+        });
       },
-      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+      (error) => {
+        if (locationRequestId.current !== requestId) return;
+        setLocationLookupBusy(false);
+        setLocationMessage(error.code === error.PERMISSION_DENIED
+          ? "Location access is blocked. Allow it in your browser or device settings, or enter the location manually."
+          : error.code === error.TIMEOUT
+            ? "Your device took too long to find its location. Try again outdoors or enter the location manually."
+            : "We couldn't read your device location. Check that location services are on, or enter the location manually.");
+      },
+      { enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 },
     );
   }
 
   useEffect(() => {
     if (identityRef.current === identity) return;
     photoAnalysisRequestId.current += 1;
+    locationRequestId.current += 1;
     removeDraft(`civicsignal.report-draft.${identityRef.current}`);
     identityRef.current = identity;
     setForm(emptyDraft);
@@ -172,6 +203,10 @@ export function ReportCreatePage() {
       payload.set("title", form.title);
       payload.set("description", form.description);
       payload.set("location", form.location);
+      if (form.latitude !== null && form.longitude !== null) {
+        payload.set("latitude", String(form.latitude));
+        payload.set("longitude", String(form.longitude));
+      }
       if (photo) payload.set("photo", photo);
 
       const guest = !user;
@@ -196,6 +231,10 @@ export function ReportCreatePage() {
 
   function discardDraft() {
     photoAnalysisRequestId.current += 1;
+    locationRequestId.current += 1;
+    setLocationMessage("");
+    setLocationLookupBusy(false);
+    setResolvingAddress(false);
     removeDraft(draftKey);
     setForm(emptyDraft);
     setPhoto(null);
@@ -209,7 +248,11 @@ export function ReportCreatePage() {
   const routingUnavailable = !categoriesLoading && !categoriesError && categories.length === 0;
   const photoStorageUnavailable = routingReadiness?.photoStorage?.status === "unavailable";
   const photoAnalysisConfigured = routingReadiness?.photoClassification?.status === "configured";
-  const coordinatesEntered = isCoordinateOnlyLocation(form.location);
+  const hasPrecisePin = form.latitude !== null && form.longitude !== null;
+  const coordinatesEntered = isCoordinateOnlyLocation(form.location) && !hasPrecisePin;
+  const mapUrl = hasPrecisePin
+    ? `https://www.openstreetmap.org/?mlat=${form.latitude}&mlon=${form.longitude}#map=18/${form.latitude}/${form.longitude}`
+    : null;
 
   useEffect(() => {
     if (!photo) {
@@ -325,14 +368,32 @@ export function ReportCreatePage() {
                 </div>
               </Field>
               <div className="location-action">
-                <strong>Enter the precise location</strong>
-                <p className="muted">Type an address, intersection, or landmark, or use your device location to fill in an editable address.</p>
+                <strong>Pin the exact place</strong>
+                <p className="muted">Use your device location to save a precise GPS pin. We’ll also try to suggest a readable address, but the pin is kept even if that lookup fails.</p>
                 <button className="button" type="button" onClick={updateLocationFromDevice} disabled={locationLookupBusy}>
-                  {locationLookupBusy ? "Finding address…" : "Use my current location"}
+                  {locationLookupBusy ? "Finding precise location…" : "Use my current location"}
                 </button>
                 {locationMessage && <p className="muted" role="status">{locationMessage}</p>}
+                {resolvingAddress && <p className="muted" role="status">Looking up a nearby address. You can continue while this finishes.</p>}
+                {hasPrecisePin && (
+                  <div className="gps-pin-summary">
+                    <span>GPS pin: {form.latitude!.toFixed(6)}, {form.longitude!.toFixed(6)}</span>
+                    {mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer">Preview on map</a>}
+                    <button className="link-button" type="button" onClick={() => {
+                      locationRequestId.current += 1;
+                      setForm((current) => ({
+                        ...current,
+                        location: current.location === "Precise GPS pin attached" ? "" : current.location,
+                        latitude: null,
+                        longitude: null,
+                      }));
+                      setResolvingAddress(false);
+                      setLocationMessage("GPS pin removed. Enter an address, intersection, or landmark before continuing.");
+                    }}>Remove pin</button>
+                  </div>
+                )}
                 <p className="muted location-attribution">
-                  Your device location is sent to {locationLookupInfo?.providerName ?? "the address lookup service"}; the returned address is editable. {locationLookupInfo?.usageNote}
+                  The exact pin is shared with the organization and authorized staff that receive this report. Only the nearby-address lookup sends coordinates to {locationLookupInfo?.providerName ?? "the address lookup service"}; the returned address is editable. {locationLookupInfo?.usageNote}
                   {locationLookupInfo?.attribution && locationLookupInfo.attributionUrl && <> <a href={locationLookupInfo.attributionUrl} target="_blank" rel="noreferrer">{locationLookupInfo.attribution}</a>.</>}
                   {locationLookupInfo?.policyUrl && <> <a href={locationLookupInfo.policyUrl} target="_blank" rel="noreferrer">Lookup service policy</a>.</>}
                 </p>
@@ -347,33 +408,24 @@ export function ReportCreatePage() {
 
             <Field
               label="Precise location"
-              hint="Enter a street address, intersection, or landmark. Only shared when you submit."
+              hint={hasPrecisePin ? "The GPS pin is saved separately. Add a street address, intersection, or landmark to help staff find it." : "Enter a street address, intersection, or landmark, or save a GPS pin above. Only shared when you submit."}
               error={fieldErrors.location ?? (coordinatesEntered ? "Enter a street address, intersection, or landmark instead of coordinates." : undefined)}
             >
               <input
                 className="input"
                 value={form.location}
                 placeholder="e.g. 25 Main St, or Main St and Oak Ave"
-                onChange={(event) => setForm({ ...form, location: event.target.value })}
-                required
+                onChange={(event) => {
+                  locationRequestId.current += 1;
+                  setResolvingAddress(false);
+                  setForm({ ...form, location: event.target.value });
+                }}
+                required={!hasPrecisePin}
                 autoComplete="street-address"
                 maxLength={300}
               />
             </Field>
-            <Field label="Issue type" hint={chosenCategory?.description || "Choose the closest configured category. CivicSignal does not guess the receiving organization."} error={fieldErrors.categoryId}>
-              <select
-                className="select"
-                value={form.categoryId}
-                onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
-                disabled={categoriesLoading || Boolean(categoriesError) || categories.length === 0}
-                required
-              >
-                <option value="">{categoriesLoading ? "Loading issue types…" : "Choose an issue type…"}</option>
-                {categories.map((category) => <option key={category.id} value={category.id}>{category.name} — {category.organizationName}</option>)}
-              </select>
-            </Field>
-
-            <Field label="Issue type" hint={chosenCategory?.description || "Choose the closest configured category. CivicSignal does not guess the receiving organization."} error={fieldErrors.categoryId}>
+            <Field label="Issue type and responsible organization" hint={chosenCategory ? `${chosenCategory.description || "This is the closest configured issue type."} Reports go to ${chosenCategory.organizationName}.` : "Choose an issue type to see which organization will receive your report."} error={fieldErrors.categoryId}>
               <select
                 className="select"
                 value={form.categoryId}
@@ -390,7 +442,7 @@ export function ReportCreatePage() {
               <button
                 className="button primary"
                 type="button"
-                disabled={!photo || analyzingPhoto || !form.categoryId || !form.location || coordinatesEntered || routingUnavailable || photoStorageUnavailable || categoriesLoading || Boolean(categoriesError)}
+                disabled={!photo || analyzingPhoto || !form.categoryId || (!form.location && !hasPrecisePin) || coordinatesEntered || routingUnavailable || photoStorageUnavailable || categoriesLoading || Boolean(categoriesError)}
                 onClick={() => {
                   if (!photo) {
                     setPhotoError("A photo of the issue is required before continuing.");
@@ -421,6 +473,12 @@ export function ReportCreatePage() {
                 <dt>Location</dt>
                 <dd>{form.location}</dd>
               </div>
+              {hasPrecisePin && (
+                <div>
+                  <dt>Precise GPS pin</dt>
+                  <dd>{form.latitude!.toFixed(6)}, {form.longitude!.toFixed(6)} · {mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer">Preview map</a>}</dd>
+                </div>
+              )}
               <div><dt>Issue type</dt><dd>{chosenCategory?.name ?? "Not selected"}</dd></div>
               <div><dt>Receiving organization</dt><dd>{chosenCategory?.organizationName ?? "Not configured"}</dd></div>
             </dl>

@@ -137,6 +137,9 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
   }
 
   const report = activeReport as Report;
+  const mapUrl = report.coordinates
+    ? `https://www.openstreetmap.org/?mlat=${report.coordinates.latitude}&mlon=${report.coordinates.longitude}#map=18/${report.coordinates.latitude}/${report.coordinates.longitude}`
+    : null;
 
   const capabilities = report.capabilities ?? {};
   const guidance = reportGuidance(report.status);
@@ -189,6 +192,12 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
         <section className="incident-location" aria-label="Incident location">
           <span className="field-label">Incident location</span>
           <p>{report.location}</p>
+          {report.coordinates && mapUrl && (
+            <p className="gps-pin-detail">
+              <strong>Precise GPS pin:</strong> {report.coordinates.latitude.toFixed(6)}, {report.coordinates.longitude.toFixed(6)}
+              {" · "}<a href={mapUrl} target="_blank" rel="noreferrer">Open map</a>
+            </p>
+          )}
         </section>
 
         <section className="next-step" aria-labelledby="next-step-heading">

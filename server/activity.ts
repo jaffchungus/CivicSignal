@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { CivicDatabase } from "./database.js";
+import { sendWebPushToUser } from "./web-push.js";
 
 export async function recordAudit(
   database: CivicDatabase,
@@ -71,6 +72,7 @@ export async function createNotification(
     type: string;
     title: string;
     message: string;
+    deferPush?: boolean;
   },
 ): Promise<void> {
   await database
@@ -88,6 +90,13 @@ export async function createNotification(
       input.message,
       Date.now(),
     );
+  if (!input.deferPush) {
+    await sendWebPushToUser(database, input.userId, {
+      title: input.title,
+      message: input.message,
+      reportId: input.reportId,
+    });
+  }
 }
 
 /** Notifies every active staff member of an organization. */
@@ -95,7 +104,8 @@ export async function notifyOrganization(
   database: CivicDatabase,
   organizationId: string,
   input: { reportId: string | null; type: string; title: string; message: string },
-): Promise<void> {
+  deferPush = false,
+): Promise<string[]> {
   const members = (await database
     .prepare(
       `SELECT id FROM users
@@ -104,6 +114,7 @@ export async function notifyOrganization(
     )
     .all(organizationId)) as Array<{ id: string }>;
   for (const member of members) {
-    await createNotification(database, { userId: member.id, ...input });
+    await createNotification(database, { userId: member.id, ...input, deferPush });
   }
+  return members.map((member) => member.id);
 }

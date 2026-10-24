@@ -47,6 +47,9 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `BLOB_READ_WRITE_TOKEN` | Server-only Blob credential when using Blob; connect a **private** Blob store. Vercel OIDC may be available when the store is connected. |
 | `REVERSE_GEOCODER_URL` | Optional HTTPS reverse-geocoding endpoint. Defaults to OpenStreetMap Nominatim. Lookups are user-triggered, cached, and rate-limited. |
 | `REVERSE_GEOCODER_NAME` and attribution settings | Set the provider name, attribution, policy URL, and usage note when changing the reverse-geocoding endpoint. |
+| `REVERSE_GEOCODER_CONTACT` | Optional operator contact placed in the identifiable address-lookup `User-Agent`. Set one when using the public Nominatim service. |
+| `WEB_PUSH_VAPID_PUBLIC_KEY` / `WEB_PUSH_VAPID_PRIVATE_KEY` | Optional Web Push credentials. If omitted, CivicSignal creates one persistent VAPID key pair in the configured database. Keep an explicitly configured private key server-only. |
+| `WEB_PUSH_SUBJECT` | Operator URL or contact email used to identify the Web Push sender. Set a real contact for production. |
 | `SUPABASE_DB_POOLER_HOST` | Optional Supavisor pooler host override for Vercel. |
 
 The Supabase and Vercel configuration details, including private storage requirements and limitations, are in [docs/SUPABASE-DEPLOYMENT.md](docs/SUPABASE-DEPLOYMENT.md). `.env.example` contains placeholders only.

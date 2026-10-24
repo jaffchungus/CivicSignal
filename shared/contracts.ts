@@ -137,6 +137,7 @@ export type Report = {
   title: string;
   description: string;
   location: string;
+  coordinates?: { latitude: number; longitude: number; accuracyMeters?: number } | null;
   status: ReportStatus;
   category: Category;
   organization?: Organization | null;

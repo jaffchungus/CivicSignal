@@ -24,6 +24,7 @@ export function AboutPage() {
         <li><strong>Choose:</strong> The resident selects an active category. A deployment administrator has already connected that category to a receiving organization.</li>
         <li><strong>Submit:</strong> The current form requires a photo, location, and category. A guest can submit without creating an account and receives a private link to save.</li>
         <li><strong>Follow the history:</strong> Residents see the report status, recorded timeline, and updates entered by authorized accounts. Each event shows who acted and when.</li>
+        <li><strong>Get alerted:</strong> Account holders can opt in to phone or computer notifications for report activity on supported browsers.</li>
         <li><strong>Understand the record:</strong> A status such as “Resolved” reflects what staff recorded in CivicSignal. It is not an independent inspection or proof that a public agency completed work.</li>
       </ul>
 
@@ -33,12 +34,16 @@ export function AboutPage() {
       </p>
 
       <p>
-        If a resident uses device location to fill in an address, the device coordinates are sent to the configured address lookup provider. The returned address is editable. On submission, the report location and photo are shared with the configured receiving organization and authorized CivicSignal staff. See the <Link to="/privacy">privacy notice</Link> for details.
+        If a resident uses device location, the exact GPS pin is saved with the report and shared with the configured receiving organization and authorized staff. Coordinates are also sent to the configured address lookup provider only when the app tries to suggest a readable address. A lookup failure does not discard the pin. See the <Link to="/privacy">privacy notice</Link> for details.
+      </p>
+
+      <p>
+        Account holders can enable browser notifications from the Notifications page. The browser asks for permission, and system alerts can arrive while the site is closed on supported devices. On iPhone and iPad, add CivicSignal to the Home Screen first.
       </p>
 
       <h2>Scope and limits</h2>
       <ul>
-        <li>CivicSignal is not affiliated with or endorsed by Representative Gottheimer, his office, a municipality, or a government agency.</li>
+        <li>CivicSignal is an independent project and is not affiliated with or endorsed by a municipality or government agency.</li>
         <li>It does not connect to 311, government records, or municipal service-area data.</li>
         <li>Receiving organizations, categories, and staff must be configured by each deployment operator. This project does not verify that a configured organization is a government agency.</li>
         <li>It does not guarantee that a report will be read or answered, and it is not an emergency channel. Use the responsible organization’s established contact method for urgent local service; call 911 for emergencies.</li>

@@ -114,6 +114,20 @@ export const api = {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   },
+  put<T>(path: string, body?: unknown): Promise<T> {
+    return request(path, {
+      method: "PUT",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  },
+  delete<T>(path: string, body?: unknown): Promise<T> {
+    return request(path, {
+      method: "DELETE",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  },
   postForm<T>(path: string, form: FormData): Promise<T> {
     return request<T>(path, { method: "POST", body: form });
   },

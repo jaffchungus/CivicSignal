@@ -27,7 +27,7 @@ function reverseGeocoderInfo() {
     attributionUrl: process.env.REVERSE_GEOCODER_ATTRIBUTION_URL || (usesNominatim ? "https://www.openstreetmap.org/copyright" : ""),
     policyUrl: process.env.REVERSE_GEOCODER_POLICY_URL || (usesNominatim ? "https://operations.osmfoundation.org/policies/nominatim/" : ""),
     usageNote: process.env.REVERSE_GEOCODER_USAGE_NOTE || (usesNominatim
-      ? "This public lookup service is rate-limited; use the button only when needed."
+      ? "This optional public lookup is limited to one request per second and may be unavailable. The exact GPS pin is saved separately. Do not submit confidential information to the lookup service."
       : "Use current-location lookup only when needed."),
   };
 }
@@ -91,11 +91,12 @@ export function createLocationRouter(deps: { database: CivicDatabase }): Router 
 
     let address: string;
     try {
-      const appOrigin = process.env.APP_ORIGIN || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
+      const appOrigin = process.env.APP_ORIGIN || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:5173");
+      const contact = process.env.REVERSE_GEOCODER_CONTACT;
       const result = await fetch(endpoint, {
         headers: {
-          "User-Agent": "CivicSignal/1.0",
-          ...(appOrigin ? { Referer: appOrigin } : {}),
+          "User-Agent": `CivicSignal/1.0 (${appOrigin}${contact ? `; ${contact}` : ""})`,
+          Referer: appOrigin,
           ...(request.get("accept-language") ? { "Accept-Language": request.get("accept-language")! } : {}),
         },
         signal: AbortSignal.timeout(5_000),

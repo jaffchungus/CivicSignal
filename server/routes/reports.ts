@@ -28,6 +28,7 @@ import {
 import { ApiError, isoTime, pathId } from "../http.js";
 import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
 import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
+import { sendWebPushToUser } from "../web-push.js";
 import type { PhotoStore } from "../photo-store.js";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
 
@@ -87,6 +88,9 @@ type ReportRow = {
   title: string;
   description: string;
   location: string;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy_meters: number | null;
   status: ReportStatus;
   moderation_status: ModerationStatus;
   created_at: number;
@@ -106,7 +110,8 @@ type ReportRow = {
 
 const REPORT_SELECT = `
   SELECT reports.id, reports.reference_code, reports.title, reports.description,
-         reports.location, reports.status, reports.moderation_status,
+         reports.location, reports.latitude, reports.longitude, reports.accuracy_meters,
+         reports.status, reports.moderation_status,
          reports.created_at, reports.updated_at,
          categories.id AS category_id, categories.name AS category_name,
          categories.description AS category_description,
@@ -121,14 +126,42 @@ const REPORT_SELECT = `
   LEFT JOIN users AS reporter ON reporter.id = reports.reporter_user_id
   LEFT JOIN users AS assignee ON assignee.id = reports.assigned_user_id`;
 
+const coordinateSchema = z.preprocess(
+  (value) => value === "" || value === null ? undefined : typeof value === "string" ? Number(value) : value,
+  z.number().finite().optional(),
+);
+
 const createReportSchema = z.object({
   categoryId: z.string().trim().min(1),
   title: z.string().trim().max(140).optional().default(""),
   description: z.string().trim().max(4000).optional().default(""),
-  location: z.string().trim().min(3).max(300).refine(
-    (location) => !isCoordinateOnlyLocation(location),
-    "Enter a street address, intersection, or landmark instead of coordinates.",
-  ),
+  location: z.string().trim().max(300).optional().default(""),
+  latitude: coordinateSchema,
+  longitude: coordinateSchema,
+  accuracyMeters: coordinateSchema,
+}).superRefine((input, context) => {
+  if ((input.latitude === undefined) !== (input.longitude === undefined)) {
+    context.addIssue({ code: "custom", path: ["location"], message: "A complete GPS pin is required." });
+  }
+  const hasCoordinates = input.latitude !== undefined && input.longitude !== undefined;
+  if (input.accuracyMeters !== undefined && (input.accuracyMeters < 0 || input.accuracyMeters > 100_000)) {
+    context.addIssue({ code: "custom", path: ["accuracyMeters"], message: "GPS accuracy must be between 0 and 100,000 meters." });
+  }
+  if (input.accuracyMeters !== undefined && !hasCoordinates) {
+    context.addIssue({ code: "custom", path: ["accuracyMeters"], message: "GPS accuracy requires a location pin." });
+  }
+  if (input.latitude !== undefined && (input.latitude < -90 || input.latitude > 90)) {
+    context.addIssue({ code: "custom", path: ["latitude"], message: "Latitude must be between -90 and 90." });
+  }
+  if (input.longitude !== undefined && (input.longitude < -180 || input.longitude > 180)) {
+    context.addIssue({ code: "custom", path: ["longitude"], message: "Longitude must be between -180 and 180." });
+  }
+  if (input.location.length < 3 && !hasCoordinates) {
+    context.addIssue({ code: "custom", path: ["location"], message: "Enter a street address, intersection, landmark, or save a GPS pin." });
+  }
+  if (isCoordinateOnlyLocation(input.location) && !hasCoordinates) {
+    context.addIssue({ code: "custom", path: ["location"], message: "Enter a street address, intersection, or landmark instead of coordinates." });
+  }
 });
 
 const listQuerySchema = z.object({
@@ -212,6 +245,13 @@ function serializeSummary(row: ReportRow) {
     title: row.title,
     description: row.description,
     location: reportLocationLabel(row.location),
+    coordinates: row.latitude !== null && row.longitude !== null
+      ? {
+          latitude: row.latitude,
+          longitude: row.longitude,
+          ...(row.accuracy_meters === null ? {} : { accuracyMeters: row.accuracy_meters }),
+        }
+      : null,
     status: row.status,
     moderationStatus: row.moderation_status,
     category: {
@@ -386,7 +426,8 @@ async function notifyReporterOfReport(
   type: string,
   title: string,
   message: string,
-): Promise<void> {
+  deferPush = false,
+): Promise<string | null> {
   if (row.reporter_user_id) {
     await createNotification(database, {
       userId: row.reporter_user_id,
@@ -394,8 +435,11 @@ async function notifyReporterOfReport(
       type,
       title,
       message,
+      deferPush,
     });
+    return deferPush ? row.reporter_user_id : null;
   }
+  return null;
 }
 
 export function createReportsRouter(deps: {
@@ -473,7 +517,10 @@ export function createReportsRouter(deps: {
 
     const title = input.title || `${category.name} issue`;
     const description = input.description;
-    const location = input.location;
+    const location = input.location || "Precise GPS pin attached";
+    const latitude = input.latitude ?? null;
+    const longitude = input.longitude ?? null;
+    const accuracyMeters = input.accuracyMeters ?? null;
     const now = Date.now();
     const reportId = randomUUID();
     const file = request.file;
@@ -495,15 +542,17 @@ export function createReportsRouter(deps: {
     }
     const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
 
+    let referenceCode = "";
+    let pushRecipients: string[] = [];
     await database.transaction(async () => {
-      const referenceCode = await nextReferenceCode(database);
+      referenceCode = await nextReferenceCode(database);
       await database
         .prepare(
           `INSERT INTO reports
-            (id, reference_code, title, description, location, category_id,
+            (id, reference_code, title, description, location, latitude, longitude, accuracy_meters, category_id,
              organization_id, reporter_user_id, assigned_user_id, status,
              moderation_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?)`,
         )
         .run(
           reportId,
@@ -511,6 +560,9 @@ export function createReportsRouter(deps: {
           title,
           description,
           location,
+          latitude,
+          longitude,
+          accuracyMeters,
           category.id,
           category.organization_id,
           reporterUserId,
@@ -553,12 +605,12 @@ export function createReportsRouter(deps: {
           );
       }
 
-      await notifyOrganization(database, category.organization_id, {
+      pushRecipients = await notifyOrganization(database, category.organization_id, {
         reportId,
         type: "REPORT_SUBMITTED",
         title: `New report: ${title}`,
         message: `${referenceCode} was submitted to ${category.name} and needs review.`,
-      });
+      }, true);
     }, async () => {
       if (storedPhoto) {
         try {
@@ -569,6 +621,11 @@ export function createReportsRouter(deps: {
       }
     });
 
+    await Promise.all(pushRecipients.map((userId) => sendWebPushToUser(database, userId, {
+      title: `New report: ${title}`,
+      message: `${referenceCode} was submitted to ${category.name} and needs review.`,
+      reportId,
+    })));
     const row = await loadReport(database, reportId);
     const viewer = { id: reporterUserId ?? "", role: "RESIDENT" as const, organizationId: null };
     return {
@@ -1023,6 +1080,7 @@ export function createReportsRouter(deps: {
     }
 
     const now = Date.now();
+    let pushRecipient: string | null = null;
     await database.transaction(async () => {
       const stillVerified = await database.prepare(
         `SELECT id FROM users
@@ -1056,12 +1114,13 @@ export function createReportsRouter(deps: {
         action: "REPORT_UPDATE_ADDED",
         message: residentMessage,
       });
-      await notifyReporterOfReport(
+      pushRecipient = await notifyReporterOfReport(
         database,
         row,
         "REPORT_REASSIGNED",
         `A new staff member is handling ${row.reference_code}`,
         residentMessage,
+        true,
       );
       await recordAudit(database, {
         actorUserId: user.id,
@@ -1076,6 +1135,13 @@ export function createReportsRouter(deps: {
         },
       });
     });
+    if (pushRecipient) {
+      await sendWebPushToUser(database, pushRecipient, {
+        title: `A new staff member is handling ${row.reference_code}`,
+        message: "The staff member handling your report has changed. The receiving organization remains the same.",
+        reportId: row.id,
+      });
+    }
     response.json(await serializeDetail(database, await loadReport(database, row.id), user));
   });
 

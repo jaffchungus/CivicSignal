@@ -1,8 +1,11 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
 
 import type { CivicDatabase } from "../database.js";
 import { ApiError, isoTime } from "../http.js";
 import { authenticate, currentUser } from "../session.js";
+import { getWebPushPublicKey, isAllowedPushEndpoint } from "../web-push.js";
 
 type NotificationRow = {
   id: string;
@@ -20,6 +23,14 @@ export function createNotificationsRouter(deps: {
   const { database } = deps;
   const router = Router();
 
+  const pushSubscriptionSchema = z.object({
+    endpoint: z.string().url().max(2_048),
+    keys: z.object({
+      p256dh: z.string().min(80).max(200),
+      auth: z.string().min(16).max(100),
+    }),
+  });
+
   function serialize(row: NotificationRow) {
     return {
       id: row.id,
@@ -31,6 +42,42 @@ export function createNotificationsRouter(deps: {
       reportId: row.report_id,
     };
   }
+
+  router.get("/push/config", authenticate(database), async (request, response) => {
+    const user = currentUser(request);
+    const publicKey = await getWebPushPublicKey(database);
+    const { deviceCount } = (await database.prepare(
+      "SELECT COUNT(*) AS deviceCount FROM push_subscriptions WHERE user_id = ?",
+    ).get(user.id)) as { deviceCount: number };
+    response.json({ publicKey, deviceCount });
+  });
+
+  router.put("/push/subscription", authenticate(database), async (request, response) => {
+    const user = currentUser(request);
+    const subscription = pushSubscriptionSchema.parse(request.body);
+    if (!isAllowedPushEndpoint(subscription.endpoint)) {
+      throw new ApiError(422, "INVALID_PUSH_ENDPOINT", "This browser's push service is not supported.");
+    }
+
+    const now = Date.now();
+    await database.prepare(
+      `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (endpoint) DO UPDATE SET
+         user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
+         updated_at = EXCLUDED.updated_at`,
+    ).run(randomUUID(), user.id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth, now, now);
+    response.status(204).end();
+  });
+
+  router.delete("/push/subscription", authenticate(database), async (request, response) => {
+    const user = currentUser(request);
+    const endpoint = z.string().url().max(2_048).parse(request.body?.endpoint);
+    await database.prepare(
+      "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+    ).run(user.id, endpoint);
+    response.status(204).end();
+  });
 
   router.get("/", authenticate(database), async (request, response) => {
     const user = currentUser(request);

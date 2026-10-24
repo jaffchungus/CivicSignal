@@ -1,4 +1,4 @@
-const CACHE = "civicsignal-shell-v1";
+const CACHE = "civicsignal-shell-v2";
 const APP_SHELL = ["/", "/offline.html", "/manifest.webmanifest", "/favicon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -32,4 +32,41 @@ self.addEventListener("fetch", (event) => {
       return cached || update;
     }));
   }
+});
+
+self.addEventListener("push", (event) => {
+  let message = {};
+  try {
+    message = event.data ? event.data.json() : {};
+  } catch {
+    message = { body: event.data?.text() ?? "A report needs your attention." };
+  }
+  const title = typeof message.title === "string" ? message.title : "CivicSignal update";
+  const body = typeof message.body === "string" ? message.body : "A report needs your attention.";
+  const url = typeof message.url === "string" && message.url.startsWith("/") && !message.url.startsWith("//")
+    ? message.url
+    : "/notifications";
+  event.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    tag: typeof message.tag === "string" ? message.tag : "civicsignal-update",
+    data: { url },
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = event.notification.data?.url;
+  const destination = typeof target === "string" && target.startsWith("/") && !target.startsWith("//")
+    ? new URL(target, self.location.origin).href
+    : new URL("/notifications", self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
+    if (existing) {
+      void existing.navigate(destination);
+      return existing.focus();
+    }
+    return self.clients.openWindow(destination);
+  }));
 });
