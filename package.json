@@ -7,7 +7,7 @@
     "dev": "concurrently -n server,client -c blue,green \"tsx watch server/index.ts\" \"vite\"",
     "build": "pnpm run typecheck && vite build && tsup server/index.ts --format esm --platform node --target node22 --out-dir dist/server --sourcemap --clean",
     "start": "node dist/server/index.js",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.server.json",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.browser-test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
