@@ -60,25 +60,58 @@ Do not put demo passwords in source code or video. A second browser profile can 
 
 ## Demo-video script · about 2 minutes
 
-**0:00–0:15 — Introduction**  
-“Hi, I’m [name of each participant]. Our app is CivicSignal. It is for residents in communities with a configured receiving organization, and the staff who record report updates. It helps residents report a non-emergency issue and follow the status and updates recorded in the app.”
+Aim for 2:00–2:20, leaving room under the 3-minute limit. Replace every bracketed item with something true for your team. The stage directions are not spoken.
 
-**0:15–0:35 — Problem**  
-“Submitting a report is only the first step. People also need to understand whether it reached anyone and what changed afterward. CivicSignal focuses on that transparency. It is not a government service or an emergency channel.”
+**0:00–0:12 — Open with the app**
 
-**0:35–1:05 — Resident report**  
-Show the fictional resident account and enter the synthetic pothole report. The app requires a photo in this version. If the server API key is configured and the deployment's audience/purpose meets Google's terms, explain that selecting the photo sends it for Gemini classification, then show the AI-selected category and its administrator-configured receiving organization. “The app routes the report to the organization mapped to the category selected by AI. It returns a reference so a guest can reopen the report with a private link.”
+**On screen:** Show the CivicSignal landing page. Keep your face in a small corner overlay if you want, but make sure the app stays readable.
 
-**1:05–1:35 — Official action**  
-Switch to the fictional verified staff account. Claim the report, change its status, and post an update. “These actions are checked by the API against the staff role and organization, then recorded as report history.”
+**Say:** “Hi, I’m [name], and this is CivicSignal. It helps residents send a non-emergency community issue to the organization configured for that issue category, then follow the updates recorded in the app.”
 
-**1:35–1:55 — Transparency feature**  
-Switch back to the resident. Show current status, the next-step guidance, update, and timeline. “The history shows who recorded each action and when. ‘Resolved’ means the organization set that status in CivicSignal; it is not an independent inspection.”
+**0:12–0:30 — State the problem and the focus**
 
-**1:55–2:10 — Engineering and close**  
-“The app uses React and TypeScript, an Express API, SQLite locally and PostgreSQL in production, and private photo storage. I used AI for [accurate list]. I personally [describe only work you reviewed, modified, tested, and understand].”
+**On screen:** Briefly point to the landing page’s three steps; do not read the page aloud.
 
-The student should say the closing AI disclosure accurately and keep the recording at or below three minutes.
+**Say:** “A report is more useful when people can see what happened after they sent it. CivicSignal brings the report, its current status, official updates, and activity history together. It’s an independent prototype—not a government service, a 311 integration, or an emergency channel.”
+
+**0:30–0:58 — Submit a fictional resident report**
+
+**On screen:** In the prepared resident session, show the report form. Use a fictional issue and location. Select the demo photo, pause to show the selected category and receiving organization, then submit. If photo suggestions are enabled and working in this demo, show the suggestion and say it is AI-generated and reviewed by the resident; otherwise skip any AI feature claim.
+
+**Say:** “Here I’m submitting a fictional pothole report. The category is connected to this demo organization, so the resident can see where the report is directed. [If applicable: ‘The photo can also generate a category and description suggestion; the resident reviews it before sending.’]”
+
+**0:58–1:12 — Show confirmation and tracking**
+
+**On screen:** Show the confirmation/reference and open the report. Hide browser bookmarks, personal data, and any access token in the URL.
+
+**Say:** “After submission, CivicSignal gives the report a reference and lets the resident return to its updates. A guest tracking link should be kept private.”
+
+**1:12–1:38 — Show the staff workflow**
+
+**On screen:** Switch to the prepared fictional, verified staff session. Claim the report, change it to “In progress” (or another status available in your demo), and post a short update such as “Crew review scheduled.”
+
+**Say:** “Now, as an authorized staff user, I can take ownership, record a status change, and post an update. These are actions recorded in CivicSignal for this report.”
+
+**1:38–1:55 — Return to the resident view**
+
+**On screen:** Switch back to the resident report. Show the new status, update, and timeline entries with their actor and time.
+
+**Say:** “Back on the resident side, the update and activity history are visible together. This is a record of what was entered in the app—not an independent verification that work was completed.”
+
+**1:55–2:15 — Explain the build and close**
+
+**On screen:** Show the app once more, or a simple end card with “CivicSignal” and your name(s).
+
+**Say:** “I built this with [accurate technologies you can explain]. I used [AI tools and what they helped with, stated accurately]. My own contribution was [specific work you personally did and understand]. CivicSignal is designed to make the follow-through on a community report easier to see. Thank you.”
+
+### Before you record
+
+- Rehearse once with a timer. Speak naturally, look at the camera for the opening and closing, and slow down on the feature you most want judges to remember.
+- Prepare a local demo with a clearly fictional organization, category, staff account, resident report, photo, and location. Use separate browser profiles for resident and staff; sign in before recording so no password appears.
+- Test the exact clicks and screen transitions first. Close unrelated tabs, silence notifications, zoom the browser so labels are legible, and keep the cursor still while you explain a screen.
+- Use a screen recording with clear narration and readable app audio/video. If a role switch or loading delay is awkward, record short clips and edit the pauses—do not speed up the important workflow.
+- If photo analysis is unavailable or not appropriate to demonstrate, do not imply it ran. Describe only features that work in the recording. Make your AI disclosure accurate and consistent with the written submission.
+- Save a backup recording and check the final video's length, sound, privacy, and public link before submitting. Keep the finished video between 1 and 3 minutes.
 
 ## AI-assistance disclosure draft
 
