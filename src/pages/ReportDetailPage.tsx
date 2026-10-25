@@ -257,12 +257,12 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
                 disabled={busy}
                 onClick={() => {
                   const action = publicTracking && guestToken
-                    ? () => api.postWithGuestAccess<{ success: boolean; feedbackId: string }>(
+                    ? () => api.postWithGuestAccess<Report>(
                         `/api/reports/${report.id}/feedback`,
-                        { feedbackType: "STILL_HAPPENING" },
-                        guestToken
+                        guestToken,
+                        { feedbackType: "STILL_HAPPENING" }
                       )
-                    : () => api.post<{ success: boolean; feedbackId: string }>(
+                    : () => api.post<Report>(
                         `/api/reports/${report.id}/feedback`,
                         { feedbackType: "STILL_HAPPENING" }
                       );
@@ -274,12 +274,12 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
                 disabled={busy}
                 onClick={() => {
                   const action = publicTracking && guestToken
-                    ? () => api.postWithGuestAccess<{ success: boolean; feedbackId: string }>(
+                    ? () => api.postWithGuestAccess<Report>(
                         `/api/reports/${report.id}/feedback`,
-                        { feedbackType: "DONT_KNOW" },
-                        guestToken
+                        guestToken,
+                        { feedbackType: "DONT_KNOW" }
                       )
-                    : () => api.post<{ success: boolean; feedbackId: string }>(
+                    : () => api.post<Report>(
                         `/api/reports/${report.id}/feedback`,
                         { feedbackType: "DONT_KNOW" }
                       );
@@ -291,12 +291,12 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
                 disabled={busy}
                 onClick={() => {
                   const action = publicTracking && guestToken
-                    ? () => api.postWithGuestAccess<{ success: boolean; feedbackId: string }>(
+                    ? () => api.postWithGuestAccess<Report>(
                         `/api/reports/${report.id}/feedback`,
-                        { feedbackType: "FIXED" },
-                        guestToken
+                        guestToken,
+                        { feedbackType: "FIXED" }
                       )
-                    : () => api.post<{ success: boolean; feedbackId: string }>(
+                    : () => api.post<Report>(
                         `/api/reports/${report.id}/feedback`,
                         { feedbackType: "FIXED" }
                       );

@@ -1421,7 +1421,10 @@ export function createReportsRouter(deps: {
         });
       }
 
-      response.json({ success: true, feedbackId });
+      // Return the updated report
+      const refreshed = await loadReport(database, row.id);
+      const viewer = userId ? { id: userId, role: "RESIDENT" as const, organizationId: null } : { id: "", role: "RESIDENT" as const, organizationId: null };
+      response.json(await serializeDetail(database, refreshed, viewer));
     },
   );
 

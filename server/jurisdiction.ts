@@ -83,7 +83,7 @@ export async function resolveMunicipalityRepresentative(
     organization_id: string;
     organization_name: string;
     municipality_id: string | null;
-  }>;
+  }> = [];
 
   if (municipalityId) {
     // First try to find staff in the specified municipality

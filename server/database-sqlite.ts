@@ -251,14 +251,14 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
     database.pragma("foreign_keys = ON");
     await retryBusy(() => database.pragma("journal_mode = WAL"));
     await retryBusy(() => database.exec(SQLITE_SCHEMA));
-    const reportColumns = database.pragma("table_info(reports)") as Array<{ name: string }>;
-    if (!reportColumns.some((column) => column.name === "latitude")) {
+    const reportTableColumns = database.pragma("table_info(reports)") as Array<{ name: string }>;
+    if (!reportTableColumns.some((column) => column.name === "latitude")) {
       database.exec("ALTER TABLE reports ADD COLUMN latitude REAL");
     }
-    if (!reportColumns.some((column) => column.name === "longitude")) {
+    if (!reportTableColumns.some((column) => column.name === "longitude")) {
       database.exec("ALTER TABLE reports ADD COLUMN longitude REAL");
     }
-    if (!reportColumns.some((column) => column.name === "accuracy_meters")) {
+    if (!reportTableColumns.some((column) => column.name === "accuracy_meters")) {
       database.exec("ALTER TABLE reports ADD COLUMN accuracy_meters REAL");
     }
     const reporterColumn = (database.pragma("table_info(reports)") as Array<{
@@ -332,8 +332,8 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
       database.exec("CREATE INDEX IF NOT EXISTS users_municipality_idx ON users(municipality_id)");
     }
 
-    const reportColumns = database.pragma("table_info(reports)") as Array<{ name: string }>;
-    if (!reportColumns.some((c) => c.name === "municipality_id")) {
+    const reportMunicipalityColumns = database.pragma("table_info(reports)") as Array<{ name: string }>;
+    if (!reportMunicipalityColumns.some((c) => c.name === "municipality_id")) {
       database.exec("ALTER TABLE reports ADD COLUMN municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
       database.exec("CREATE INDEX IF NOT EXISTS reports_municipality_idx ON reports(municipality_id)");
     }
