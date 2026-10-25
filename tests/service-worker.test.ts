@@ -19,6 +19,7 @@ it("retries an asset fetch when a response body cannot be cloned for caching", a
   const listeners = new Map<string, (event: WorkerFetchEvent) => void>();
   const consumedResponse = new Response("consumed");
   await consumedResponse.text();
+  const cloneResponse = vi.spyOn(consumedResponse, "clone");
   const freshResponse = new Response("fresh bundle");
   const fetchMock = vi.fn()
     .mockResolvedValueOnce(consumedResponse)
@@ -52,4 +53,5 @@ it("retries an asset fetch when a response body cannot be cloned for caching", a
   await expect(response?.text()).resolves.toBe("fresh bundle");
   await Promise.all(waitUntilPromises);
   expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(cloneResponse).not.toHaveBeenCalled();
 });
