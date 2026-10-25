@@ -15,6 +15,7 @@ import {
 afterEach(async () => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   await cleanupApplications();
 });
 
@@ -505,6 +506,36 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
       .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
       .expect(503);
     expect(response.body.error.code).toBe("AI_NOT_CONFIGURED");
+  });
+
+  it("keeps Gemini provider diagnostics out of the photo-analysis API response", async () => {
+    const { residentAgent } = await scenario();
+    vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    const providerLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        error: {
+          code: 403,
+          status: "PERMISSION_DENIED",
+          message: "API key test-gemini-key was rejected",
+        },
+      }), { status: 403 }),
+    ));
+
+    const response = await residentAgent
+      .post("/api/reports/analyze-photo")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
+      .expect(503);
+
+    expect(response.body.error).toEqual({
+      code: "AI_PROVIDER_UNAVAILABLE",
+      message: "AI photo classification is unavailable right now. Please try again later.",
+    });
+    expect(JSON.stringify(response.body)).not.toContain("test-gemini-key");
+    expect(providerLog).toHaveBeenCalledWith("[photo-analysis] Gemini request failed", expect.objectContaining({
+      providerStatus: "PERMISSION_DENIED",
+      providerMessage: "API key [redacted] was rejected",
+    }));
   });
 
   it("resolves the municipal representative using deterministic code (no AI)", async () => {

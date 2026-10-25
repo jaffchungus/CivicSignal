@@ -40,6 +40,12 @@ Gemini photo analysis is enabled automatically when `GEMINI_API_KEY` is set in t
 
 The API request uses the current Gemini parameter format (no deprecated `temperature`, `top_p`, or `top_k` sampling parameters). Selecting a photo automatically sends it for classification when the service is configured; the model can choose only from active categories and their mapped organizations. The form displays the resulting route but does not offer a manual category or organization selector. The photo is also shared with the selected organization and authorized staff when submitted. The request times out after 15 seconds to handle provider latency gracefully.
 
+### Troubleshooting photo-analysis 503 responses
+
+`/api/routing/readiness` reports whether `GEMINI_API_KEY` is present, not whether Gemini accepts it or the configured model/request. When analysis returns `AI_PROVIDER_UNAVAILABLE`, check Vercel function logs for `[photo-analysis] Gemini request failed` or `[photo-analysis] Gemini request could not be completed`. HTTP failures log the model and upstream status, plus Gemini's structured error code/status/message when available. Transport failures log the error name/message. The API key is redacted from diagnostic text, and the image and provider details are never returned to the browser.
+
+Use the upstream status/message to distinguish key or quota/billing problems from model/request rejection and temporary provider/network errors. Correct the corresponding server-side Vercel configuration or model/request issue, then retry photo analysis. A `[production] Configured photo storage failed; using database photo storage.` warning concerns photo attachment persistence; `/api/reports/analyze-photo` does not write to photo storage, so that warning does not explain a Gemini analysis failure.
+
 The shared 4 MiB image limit leaves room for multipart framing under Vercel Functions' 4.5 MB request-body limit. The API function allows up to 60 seconds on Vercel Hobby. Other existing production limitations, including per-instance rate limiting and concurrency-sensitive workflow mutations, are not solved by this integration.
 
 ## Report reference allocation and rollback cleanup

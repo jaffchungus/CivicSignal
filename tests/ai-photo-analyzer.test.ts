@@ -28,6 +28,20 @@ const successfulResponse: {
   ],
 };
 
+/** Collect every enum value in a Gemini response schema for assertions. */
+function geminiEnumValues(schema: unknown): string[] {
+  if (Array.isArray(schema)) return schema.flatMap(geminiEnumValues);
+  if (typeof schema !== "object" || schema === null) return [];
+  const record = schema as Record<string, unknown>;
+  const own = Array.isArray(record.enum)
+    ? record.enum.filter((value): value is string => typeof value === "string")
+    : [];
+  return [
+    ...own,
+    ...Object.values(record).flatMap(geminiEnumValues),
+  ];
+}
+
 describe("Gemini photo analysis", () => {
   beforeEach(() => {
     vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
@@ -37,6 +51,7 @@ describe("Gemini photo analysis", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("sends the image to the supported vision model using a server-side API key", async () => {
@@ -73,15 +88,32 @@ describe("Gemini photo analysis", () => {
       responseMimeType: "application/json",
       responseSchema: {
         properties: {
-          suggestedCategoryId: { enum: ["roads", ""] },
+          suggestedCategoryId: { type: "STRING" },
         },
         required: expect.arrayContaining(["suggestedCategoryId", "isSpam"]),
       },
       thinkingConfig: { thinkingLevel: "minimal" },
       maxOutputTokens: 1024,
     });
+    expect(geminiEnumValues(requestBody.generationConfig.responseSchema))
+      .not.toContain("");
     expect(result.problem).toBe("A pothole is visible in the road.");
     expect(result.suggestedCategoryId).toBe("roads");
+  });
+
+  // Gemini rejects the entire request with 400 when any responseSchema enum
+  // contains an empty string, so the category must be validated in code.
+  it("never sends an empty enum value in the Gemini response schema", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(successfulResponse), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await detectProblemInPhoto(Buffer.from("image"), "image/png", []);
+
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const { generationConfig } = JSON.parse(String(options.body));
+    expect(geminiEnumValues(generationConfig.responseSchema)).not.toContain("");
   });
 
   it("ignores Gemini thought parts and parses the final JSON response", async () => {
@@ -144,12 +176,49 @@ describe("Gemini photo analysis", () => {
   });
 
   it("reports provider failures instead of returning heuristic output", async () => {
+    const providerLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response("provider unavailable", { status: 503 }),
+      new Response(JSON.stringify({
+        error: {
+          code: 403,
+          status: "PERMISSION_DENIED",
+          message: "API key test-gemini-key was rejected",
+        },
+      }), { status: 403 }),
     ));
 
     await expect(detectProblemInPhoto(Buffer.from("image"), "image/png"))
-      .rejects.toMatchObject({ status: 503, code: "AI_PROVIDER_UNAVAILABLE" });
+      .rejects.toMatchObject({
+        status: 503,
+        code: "AI_PROVIDER_UNAVAILABLE",
+        message: "AI photo classification is unavailable right now. Please try again later.",
+      });
+    expect(providerLog).toHaveBeenCalledWith("[photo-analysis] Gemini request failed", {
+      model: "gemini-3-flash-preview",
+      httpStatus: 403,
+      providerCode: 403,
+      providerStatus: "PERMISSION_DENIED",
+      providerMessage: "API key [redacted] was rejected",
+    });
+  });
+
+  it("logs sanitized network failures without changing the client-facing error", async () => {
+    const providerLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(
+      new TypeError("Network failure for test-gemini-key"),
+    ));
+
+    await expect(detectProblemInPhoto(Buffer.from("image"), "image/png"))
+      .rejects.toMatchObject({
+        status: 503,
+        code: "AI_PROVIDER_UNAVAILABLE",
+        message: "The photo classification service could not be reached. Please try again later.",
+      });
+    expect(providerLog).toHaveBeenCalledWith("[photo-analysis] Gemini request could not be completed", {
+      model: "gemini-3-flash-preview",
+      errorName: "TypeError",
+      errorMessage: "Network failure for [redacted]",
+    });
   });
 
   it("detects spam images", async () => {

@@ -22,6 +22,14 @@ interface GeminiResponse {
   }>;
 }
 
+interface GeminiErrorResponse {
+  error?: {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+  };
+}
+
 export function isPhotoAnalysisConfigured(): boolean {
   return Boolean(
     process.env.GEMINI_API_KEY?.trim() &&
@@ -52,10 +60,10 @@ export async function detectProblemInPhoto(
     type: "OBJECT",
     properties: {
       problem: { type: "STRING" },
-      suggestedCategoryId: {
-        type: "STRING",
-        enum: [...categories.map((category) => category.id), ""],
-      },
+      // The provider rejects an enum that contains an empty string with a 400
+      // ("enum[i]: cannot be empty"). Keep this a free-form string and validate
+      // it against the configured category ids below instead.
+      suggestedCategoryId: { type: "STRING" },
       suggestedTitle: { type: "STRING" },
       suggestedDescription: { type: "STRING" },
       confidence: { type: "NUMBER" },
@@ -118,7 +126,8 @@ Return only a JSON object with this shape:
       }),
       signal: AbortSignal.timeout(15_000),
     });
-  } catch {
+  } catch (error) {
+    logProviderTransportFailure(error, apiKey);
     throw new ApiError(
       503,
       "AI_PROVIDER_UNAVAILABLE",
@@ -127,6 +136,7 @@ Return only a JSON object with this shape:
   }
 
   if (!response.ok) {
+    await logProviderResponseFailure(response, apiKey);
     throw new ApiError(
       503,
       "AI_PROVIDER_UNAVAILABLE",
@@ -193,6 +203,47 @@ function boundedText(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+async function logProviderResponseFailure(response: Response, apiKey: string): Promise<void> {
+  let providerError: GeminiErrorResponse["error"];
+  try {
+    const body: unknown = await response.clone().json();
+    if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+      const error = (body as GeminiErrorResponse).error;
+      if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+        providerError = error;
+      }
+    }
+  } catch {
+    // The HTTP status is still actionable when the provider body is not JSON.
+  }
+
+  console.error("[photo-analysis] Gemini request failed", {
+    model: GEMINI_MODEL,
+    httpStatus: response.status,
+    ...(typeof providerError?.code === "number" ? { providerCode: providerError.code } : {}),
+    ...(typeof providerError?.status === "string"
+      ? { providerStatus: boundedDiagnosticText(providerError.status, apiKey) }
+      : {}),
+    ...(typeof providerError?.message === "string"
+      ? { providerMessage: boundedDiagnosticText(providerError.message, apiKey) }
+      : {}),
+  });
+}
+
+function logProviderTransportFailure(error: unknown, apiKey: string): void {
+  console.error("[photo-analysis] Gemini request could not be completed", {
+    model: GEMINI_MODEL,
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    ...(error instanceof Error
+      ? { errorMessage: boundedDiagnosticText(error.message, apiKey) }
+      : {}),
+  });
+}
+
+function boundedDiagnosticText(value: string, apiKey: string): string {
+  return value.replaceAll(apiKey, "[redacted]").replace(/[\r\n]+/g, " ").slice(0, 500);
 }
 
 function invalidProviderResponse(): ApiError {
