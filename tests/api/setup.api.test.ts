@@ -44,36 +44,6 @@ describe("first-run setup", () => {
       });
   });
 
-  it("creates only one administrator when first-run setup requests race", async () => {
-    const app = await testApplication();
-
-    const responses = await Promise.all([
-      request(app).post("/api/setup").send(ADMIN_CREDENTIALS),
-      request(app).post("/api/setup").send({
-        ...ADMIN_CREDENTIALS,
-        displayName: "Second Administrator",
-        email: "second-admin@example.test",
-      }),
-    ]);
-
-    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
-    await request(app)
-      .get("/api/setup/status")
-      .expect(200)
-      .expect(({ body }) => {
-        expect(body.setupRequired).toBe(false);
-      });
-    await request(app)
-      .post("/api/auth/login")
-      .send({
-        email: responses[0].status === 201
-          ? ADMIN_CREDENTIALS.email
-          : "second-admin@example.test",
-        password: ADMIN_CREDENTIALS.password,
-      })
-      .expect(200);
-  });
-
   it("starts without placeholder organizations or categories", async () => {
     const app = await testApplication();
 

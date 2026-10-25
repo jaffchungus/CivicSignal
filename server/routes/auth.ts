@@ -17,15 +17,10 @@ import {
   createSession,
   currentUser,
   destroySession,
-  revokeOtherSessions,
   userForSessionToken,
 } from "../session.js";
 import { recordAudit } from "../activity.js";
 import { findUser } from "../users.js";
-
-// Checked against unknown emails so sign-in takes the same bcrypt path either way.
-// This hash belongs to no account; only its cost factor is used.
-const ABSENT_USER_PASSWORD_HASH = "$2b$12$JxFW0YHrmenI8P0iStfuduLdPg2hiccPAqGiTfg4o7PBE10dB5Dk6";
 
 const setupSchema = z.object({
   municipalityName: z.string().trim().min(2).max(120),
@@ -93,19 +88,6 @@ export function createAuthRouter(deps: {
           count: number;
         };
         if (existing.count !== 0) {
-          return null;
-        }
-
-        // A unique settings claim serializes first-run setup across instances.
-        // An uncommitted claim from another instance blocks this insert, then
-        // returns no row, so only one administrator can be created.
-        const claim = (await database
-          .prepare(
-            `INSERT INTO settings (key, value) VALUES ('system_initialized', ?)
-             ON CONFLICT (key) DO NOTHING RETURNING key`,
-          )
-          .get(String(now))) as { key: string } | undefined;
-        if (!claim) {
           return null;
         }
 
@@ -262,10 +244,9 @@ export function createAuthRouter(deps: {
         .get(normalizedEmail(input.email))) as
         | { id: string; password_hash: string; status: string }
         | undefined;
-      const passwordMatches = await bcrypt.compare(
-        input.password,
-        row?.password_hash ?? ABSENT_USER_PASSWORD_HASH,
-      );
+      const passwordMatches = row
+        ? await bcrypt.compare(input.password, row.password_hash)
+        : false;
       if (!row || !passwordMatches) {
         sendError(response, 401, "INVALID_CREDENTIALS", "The email or password is incorrect.");
         return;
@@ -335,17 +316,15 @@ export function createAuthRouter(deps: {
       }
 
       const passwordHash = await bcrypt.hash(input.newPassword, 12);
-      await database.transaction(async () => {
-        await database
-          .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
-          .run(passwordHash, Date.now(), user.id);
-        await revokeOtherSessions(database, request, user.id);
-        await recordAudit(database, {
-          actorUserId: user.id,
-          action: "PASSWORD_CHANGED",
-          targetType: "USER",
-          targetId: user.id,
-        });
+      await database
+        .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+        .run(passwordHash, Date.now(), user.id);
+
+      await recordAudit(database, {
+        actorUserId: user.id,
+        action: "PASSWORD_CHANGED",
+        targetType: "USER",
+        targetId: user.id,
       });
 
       response.json({ user: await findUser(database, user.id) });

@@ -22,7 +22,6 @@ The supplied project URL and publishable key are in the ignored `.env.local` and
 
 To use Supabase Storage, set these in Vercel's environment settings (not source control):
 
-- `APP_ORIGIN`: the exact public browser origin, for example `https://civicsignal.example`. The API accepts it when validating `Origin`/`Referer` on state-changing requests and uses it to identify the app to external providers.
 - `DB_PASSWORD`: set the database password as a Vercel environment variable to use the supplied direct host `db.zocubotkhlkrtbyyheiu.supabase.co:5432`, database `postgres`, and user `postgres`. The server percent-encodes the password and adds `sslmode=require` when building the connection URL. Alternatively, set `CONNECTION_STRING` to the full URI from Supabase **Connect**; it takes precedence over `DB_PASSWORD`. For Vercel serverless, Supabase recommends its **Transaction pooler** URI; direct database hosts are IPv6-only unless the project has the IPv4 add-on. If using the pooler, set its full URI in `CONNECTION_STRING`. Do not substitute the Supabase API URL.
 - `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`: `https://zocubotkhlkrtbyyheiu.supabase.co`.
 - `SUPABASE_SECRET_KEY`: a server-only secret from **Settings → API Keys**. Legacy `SUPABASE_SERVICE_ROLE_KEY` is supported if already provisioned. Never use a `VITE_` or `NEXT_PUBLIC_` prefix for a privileged credential.

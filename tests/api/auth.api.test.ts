@@ -1,13 +1,11 @@
 // @vitest-environment node
 
-import bcrypt from "bcryptjs";
 import request from "supertest";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { cleanupApplications, setupAdministrator, testApplication } from "./helpers";
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   await cleanupApplications();
 });
 
@@ -38,20 +36,6 @@ describe("authentication", () => {
     expect(attempts[10].status).toBe(429);
     expect(attempts[10].headers["cache-control"]).toBe("private, no-store");
     expect(attempts[10].body.error.code).toBe("RATE_LIMITED");
-  });
-
-  it("runs the password comparison even when the email is unknown", async () => {
-    const app = await testApplication();
-    const compare = vi.spyOn(bcrypt, "compare");
-
-    await request(app)
-      .post("/api/auth/login")
-      .send({ email: "unknown@example.test", password: "a wrong password" })
-      .expect(401)
-      .expect(({ body }) => {
-        expect(body.error.code).toBe("INVALID_CREDENTIALS");
-      });
-    expect(compare).toHaveBeenCalledOnce();
   });
 
   it("registers residents, rejects duplicates and self-declared administrators", async () => {

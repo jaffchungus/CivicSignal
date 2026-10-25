@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(ls -la docs && ls AGENTS.md QODER.md 2>/dev/null; git status --short | head -50)",
-      "Bash(wc -l server/*.ts server/routes/*.ts shared/*.ts src/lib/*.ts tests/api/*.ts tests/*.ts api/*.ts | sort -n)"
-    ]
-  }
-}

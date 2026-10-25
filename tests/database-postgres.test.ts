@@ -57,8 +57,7 @@ describe("Postgres adapter", () => {
     expect(sql[0]).toBe("BEGIN");
     expect(sql[1]).toContain("pg_advisory_xact_lock");
     expect(sql[2]).toContain("CREATE TABLE IF NOT EXISTS users");
-    expect(sql.some((statement) => statement.includes("ALTER COLUMN reporter_user_id DROP NOT NULL")))
-      .toBe(true);
+    expect(sql[3]).toContain("DROP NOT NULL");
     const dataApiProtection = sql.find((statement) => statement.includes("ENABLE ROW LEVEL SECURITY"));
     expect(dataApiProtection).toContain("FROM PUBLIC");
     expect(dataApiProtection).toContain("'anon', 'authenticated'");

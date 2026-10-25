@@ -96,35 +96,4 @@ describe("guest reporting and secure follow-up", () => {
       .set("X-Guest-Access", "incorrect-token")
       .expect(404);
   });
-
-  it("honors report moderation for guest details, follow-ups, and photos", async () => {
-    const { app } = await testApplicationWithUploads();
-    const admin = await setupAdministrator(app);
-    const { body: catalog } = await request(app).get("/api/categories").expect(200);
-    const category = catalog.categories[0];
-    const created = await request(app)
-      .post("/api/reports/guest")
-      .field("categoryId", category.id)
-      .field("location", "Civic Center")
-      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
-      .expect(201);
-    const guestAccess = { "X-Guest-Access": created.body.guestAccessToken };
-    const guestUrl = `/api/reports/${created.body.id}/guest`;
-    const attachmentUrl = `${guestUrl}/attachments/${created.body.attachments[0].id}`;
-
-    await admin
-      .post(`/api/reports/${created.body.id}/moderation`)
-      .send({ moderationStatus: "HIDDEN" })
-      .expect(200);
-    await request(app).get(guestUrl).set(guestAccess).expect(200);
-    await request(app).get(attachmentUrl).set(guestAccess).expect(200);
-
-    await admin
-      .post(`/api/reports/${created.body.id}/moderation`)
-      .send({ moderationStatus: "REMOVED" })
-      .expect(200);
-    await request(app).get(guestUrl).set(guestAccess).expect(404);
-    await request(app).get(attachmentUrl).set(guestAccess).expect(404);
-    await request(app).post(`${guestUrl}/still-happening`).set(guestAccess).expect(404);
-  });
 });

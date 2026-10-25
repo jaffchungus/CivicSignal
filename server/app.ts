@@ -19,16 +19,6 @@ import { createReportsRouter } from "./routes/reports.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_SESSION_TTL_DAYS = 7;
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-
-function normalizedOrigin(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
 
 type AppOptions = {
   database: CivicDatabase;
@@ -64,35 +54,6 @@ export function createApp(options: AppOptions) {
       },
     }),
   );
-  const configuredOrigin = normalizedOrigin(process.env.APP_ORIGIN);
-  // SameSite cookies block ordinary cross-site posts; this also rejects
-  // same-site requests from an untrusted sibling origin. Requests without an
-  // Origin/Referer are non-browser clients and remain usable.
-  app.use("/api", (request, response, next) => {
-    if (SAFE_METHODS.has(request.method)) {
-      next();
-      return;
-    }
-    const source = request.get("origin") ?? request.get("referer");
-    if (!source) {
-      next();
-      return;
-    }
-    const sourceOrigin = normalizedOrigin(source);
-    const requestOrigin = normalizedOrigin(
-      `${request.protocol}://${request.get("host") ?? ""}`,
-    );
-    if (!sourceOrigin || (sourceOrigin !== configuredOrigin && sourceOrigin !== requestOrigin)) {
-      sendError(
-        response,
-        403,
-        "INVALID_ORIGIN",
-        "This request did not originate from CivicSignal.",
-      );
-      return;
-    }
-    next();
-  });
   app.use(compression());
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());

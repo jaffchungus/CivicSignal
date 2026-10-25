@@ -8,7 +8,7 @@ CivicSignal is a civic app that helps solve community issues. Residents can subm
 - **API:** Express 5 in `server/app.ts`. Vercel invokes it through `api/index.ts`; local development runs `server/index.ts` and Vite together.
 - **Contracts:** `shared/contracts.ts` owns shared API types, report statuses, and allowed status transitions.
 - **Database:** `CivicDatabase` is the shared async data-access seam. Local development and tests use SQLite; production uses PostgreSQL. Existing schema initialization is performed by the database adapters at startup.
-- **Authentication:** Express issues random session tokens in an HttpOnly, SameSite=Lax cookie (Secure in production). Only a SHA-256 token hash is stored in the database. Unsafe API requests with a mismatched `Origin`/`Referer` are rejected, and changing a password revokes the account's other sessions. Report and staff authorization is enforced in API routes.
+- **Authentication:** Express issues random session tokens in an HttpOnly, SameSite=Lax cookie (Secure in production). Only a SHA-256 token hash is stored in the database. Report and staff authorization is enforced in API routes.
 - **Photos:** The API checks the declared MIME type against the file signature before storage and serves attachments only after the report authorization check. Production uses private Supabase Storage or private Vercel Blob when configured, and falls back to a private Postgres table when those providers are unavailable.
 - **Report history:** Each report stores status events, responsible staff, and official updates. The resident view combines that persisted history with plain-language guidance tied to the current status.
 
@@ -36,7 +36,6 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `DATABASE_PATH` | SQLite file for local development (default `./data/civicsignal.db`). |
 | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
 | `SESSION_TTL_DAYS` | Local session expiry in days (local entry defaults to 14). |
-| `APP_ORIGIN` | Canonical browser origin, such as `https://civicsignal.example`. Set the exact public origin in production. It identifies CivicSignal to external providers and is accepted alongside the request host when validating `Origin`/`Referer` on state-changing API requests. |
 | `GEMINI_API_KEY` | Server-only Google Gemini API key. When configured, selecting a photo automatically asks Gemini 3 Flash Preview to classify the issue and choose an administrator-configured category, which determines the receiving organization. Photo classification is required to submit a report. Never use a `VITE_` or `NEXT_PUBLIC_` prefix; the deployment operator must verify the audience and API use meet Google's current terms. |
 | `DISABLE_GEMINI_PHOTO_ANALYSIS` | Optional emergency switch. Set to `true` to disable classification even when `GEMINI_API_KEY` is configured; report submission is unavailable while classification is disabled. |
 | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |
