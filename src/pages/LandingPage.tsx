@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Download, Eye, MapPin } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
 import { Link } from "react-router-dom";
 
 type InstallPromptEvent = Event & {
@@ -40,7 +40,7 @@ function InstallAction() {
   const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent);
   return (
     <div className="install-action">
-      <button className="button" type="button" onClick={() => void install()}>
+      <button className="install-button" type="button" onClick={() => void install()}>
         <Download aria-hidden="true" size={17} />
         {installed ? "CivicSignal is installed" : "Install CivicSignal"}
       </button>
@@ -61,57 +61,59 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
     <section className="landing">
       <div className="landing-hero">
         <div className="landing-copy">
-          <p className="eyebrow">Non-emergency community reporting</p>
-          <h1>Report an issue. Follow its recorded updates.</h1>
+          <p className="eyebrow">Community issue reporting</p>
+          <h1>Report a local issue. Follow its updates.</h1>
           <p className="landing-lede">
-            Submit a non-emergency report, then check back for status changes and updates recorded by staff.
+            Send a non-emergency report to an organization configured for this community. Come back here to see any updates its staff record.
           </p>
           <div className="button-row landing-actions">
             <Link className="button primary" to="/reports/new">
-              Report an issue <ArrowRight aria-hidden="true" size={17} />
+              Start a report <ArrowRight aria-hidden="true" size={17} />
             </Link>
             <InstallAction />
           </div>
-          <p className="muted">No account is required. Save the private tracking link to return to a guest report.</p>
+          <p className="landing-note">No account needed. Keep the private tracking link to return to a guest report.</p>
           {setupRequired && <p className="warning" role="status">This community still needs an administrator to configure report categories before reports can be sent.</p>}
           <p className="landing-signin"><Link to="/signin">Already have an account? Sign in</Link></p>
         </div>
-        <div className="landing-panel" aria-label="How CivicSignal works">
-          <div className="landing-panel-heading">
-            <span className="landing-mark"><Eye aria-hidden="true" size={20} /></span>
-            <div>
-              <span className="reference">REPORT → RECORDED UPDATE</span>
-              <strong>Follow the record in one place</strong>
-            </div>
-          </div>
-          <ol className="journey-list">
-            <li><span>1</span><div><strong>Choose a category</strong><small>An administrator connects each category to a receiving organization.</small></div></li>
-            <li><span>2</span><div><strong>Submit your report</strong><small>This version requires a photo. AI automatically generates the description if configured.</small></div></li>
-            <li><span>3</span><div><strong>Follow the history</strong><small>See each status change, update, and who recorded it.</small></div></li>
-          </ol>
-          <div className="landing-panel-foot"><Eye aria-hidden="true" size={16} /> A “Resolved” status is what staff recorded; CivicSignal does not independently inspect the work.</div>
-        </div>
       </div>
 
-      <div className="landing-value-grid">
-        <article className="card landing-value">
-          <MapPin aria-hidden="true" size={22} />
-          <h2>Routing is configured, not guessed</h2>
-          <p>Residents choose an issue category. An administrator maps each category to an organization; CivicSignal does not infer a town or connect to 311.</p>
-        </article>
-        <article className="card landing-value">
-          <Eye aria-hidden="true" size={22} />
-          <h2>See what staff recorded</h2>
-          <p>Review timestamped status changes and updates from authorized accounts. CivicSignal does not independently verify the work.</p>
-        </article>
-      </div>
+      <section className="landing-process" aria-labelledby="process-title">
+        <div className="landing-process-heading">
+          <span className="eyebrow">What to expect</span>
+          <h2 id="process-title">A report, then a record of what happens.</h2>
+        </div>
+        <ol className="landing-steps">
+          <li>
+            <span className="landing-step-number">01</span>
+            <div>
+              <h3>Choose what needs attention</h3>
+              <p>Pick from the categories available in this community. Each one is connected to a receiving organization by an administrator.</p>
+            </div>
+          </li>
+          <li>
+            <span className="landing-step-number">02</span>
+            <div>
+              <h3>Send the details</h3>
+              <p>Submit a required photo and description, plus location. If enabled, an AI suggestion can help draft the description for you to review.</p>
+            </div>
+          </li>
+          <li>
+            <span className="landing-step-number">03</span>
+            <div>
+              <h3>Check for an update</h3>
+              <p>See timestamped status changes and notes recorded by authorized staff. CivicSignal does not independently verify completed work.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
 
       <aside className="emergency-notice landing-notice" role="note">
         <strong>Not an emergency service.</strong>
         <span>CivicSignal is not monitored for urgent situations and does not guarantee a response. If someone is in immediate danger, call 911. For urgent local service, contact the responsible organization directly.</span>
       </aside>
       <p className="landing-disclaimer">
-        CivicSignal is an independent prototype, not a government service or a municipal 311 integration. Only organizations explicitly configured for a deployment can receive reports; no government endorsement or response is implied.
+        CivicSignal is an independent prototype, not a government service or municipal 311 integration. Reports go only to organizations configured for this deployment; no government endorsement or response is implied.
       </p>
     </section>
   );

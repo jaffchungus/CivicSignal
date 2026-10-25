@@ -1,70 +1,93 @@
-# Prompt: audit and refine CivicSignal's design
+# Prompt: make CivicSignal feel intentionally designed
 
-Copy this prompt into an AI coding assistant with access to the CivicSignal repository. It asks the assistant to identify design and copy that feel generic or plausibly AI-generated, propose concrete replacements, and make only safe, explicitly approved refinements.
+Copy this prompt into Cursor or another AI coding assistant with access to the CivicSignal repository. It guides the assistant from product purpose to UI decisions, then implementation and UX review. It is about making the experience specific, clear, and trustworthy—not fooling AI detectors or making unsupported claims about how something was written.
 
 ```text
-Audit CivicSignal for parts of the product that feel generic, formulaic, over-polished, or plausibly AI-generated. Suggest specific fixes, but do not edit any repository files until I have reviewed the audit and explicitly approved the exact changes. The goal is to make the app feel more deliberately made for its actual civic-reporting purpose—not to fool AI detectors, disguise AI use, or claim that you can determine who or what wrote something.
+Help me improve CivicSignal's website so it feels deliberately designed for its real users and purpose, rather than like a generic AI-generated template. Work through the five steps below in order. Inspect the existing product before proposing or changing the UI. Keep the scope focused on user experience and visual design; do not change the product's underlying behavior.
 
-Treat "AI-generated" as a design impression, not a verified fact about authorship. Never label a line, component, or page as AI-written unless the repository explicitly documents that provenance. Instead, describe observable traits that can make it feel generic and explain why they may not fit CivicSignal. Do not make changes just to be quirky, less polished, or more "human." Do not add fake personality, forced informality, intentional imperfections, decorative gimmicks, or unsupported claims.
+The phrase "looks AI-generated" describes an impression, not verified authorship. Do not claim that any existing text or code was written by AI. Look for observable problems such as generic copy, predictable template patterns, weak hierarchy, needless repetition, or visual choices that do not serve the user's task. Do not add quirks, forced informality, deliberate imperfections, trendy effects, or decorative elements merely to seem human.
 
-FAIL-CLOSED RULE: This prompt begins in AUDIT-ONLY mode. In that mode you may inspect files and run read-only checks, but you must not create, edit, delete, rename, format, stage, commit, deploy, or otherwise mutate repository files or data. Do not interpret the request to "audit," "suggest," "improve," or "make it better" as permission to edit. Only leave audit-only mode after I explicitly approve specific findings, intended changes, and the exact files allowed to change. If approval is ambiguous, incomplete, or broader than the proposed scope, ask for clarification and do nothing.
+## Step 1 — Identify the message
 
-Phase 1 — Audit only; make no changes:
-1. Check the current git status and diff. Record existing changes and preserve them. Do not stash, reset, checkout, clean, or overwrite anything.
-2. Inspect the actual app in the browser if practical, and read its pages, shared components, styles, product documentation, and relevant tests. Follow the real user journey from landing page through report submission and report follow-up, as well as relevant account/navigation screens. Do not infer appearance or behavior from filenames alone.
-3. Look for specific signals such as:
-   - vague, interchangeable marketing copy, grand claims, repeated slogans, or headings that do not explain the actual feature;
-   - repeated or redundant explanations, generic filler, unnatural transitions, and overly uniform sentence rhythms;
-   - stock-template visual patterns that appear without a product reason (for example, repeated cards, badges, gradients, oversized rounded panels, decorative icons, or identical hero/feature sections);
-   - inconsistent spacing, typography, button styles, hierarchy, alignment, or page layouts that make the experience feel assembled rather than cohesive;
-   - generic placeholder language, empty states, or calls to action that do not tell a resident what will happen next.
-   These are investigation prompts, not assumptions that CivicSignal necessarily has these problems. Cite the exact text, page/component, or visual pattern you observed.
-4. For each suspected issue, separate observation from interpretation. Explain what feels generic, why it may weaken clarity or trust for this product, and what a more specific alternative would accomplish. Do not make unsupported authorship claims.
-5. Produce a concise audit table with exact file paths and line numbers where possible:
+First inspect the actual application, including its pages, shared components, styles, routes, and product documentation. If a browser preview is available, use it to see the current experience at desktop and mobile sizes. Do not infer the design from filenames or screenshots alone.
 
-   | Location | Observed issue | Why it feels generic or mismatched | Proposed fix | Risk |
-   |---|---|---|---|---|
+For each key screen, answer:
+- What should the user feel or understand at first glance?
+- What is this screen for: guiding, reassuring, informing, or prompting an action?
+- What is the one thing the user most needs to notice?
 
-   Include only evidence-backed findings. Mark subjective judgments as subjective. Prioritize fixes that improve clarity, trust, accessibility, or consistency. Exclude purely cosmetic changes with no clear benefit.
-6. Record the behavior, copy disclosures, and product facts that must remain unchanged. Treat the report journey and follow-up/history experience as especially important.
-7. End with a proposed change list: for each proposed change, name the exact file(s), the specific edit, the reason, and the verification needed. Separate low-risk copy/style edits from any change with functional, privacy, accessibility, or data risk.
-8. Stop and wait for my approval. Do not edit files in this phase. The audit and recommendations are the deliverable until I approve a specific change list.
+Write a one-sentence design north star for the website as a whole, then a short one for each screen you intend to change. Ground these in the product's verified purpose and behavior. For CivicSignal, preserve the core idea: residents can submit a non-emergency community issue to an organization configured for the community, then return to see updates recorded by authorized staff. Do not imply that every report will receive a response or that CivicSignal is a government service.
 
-Phase 2 — Implement only after explicit approval:
-Proceed only if I explicitly approve the proposed changes and allowed files. Approval of one item does not approve other findings. If my approval does not clearly identify the approved items/files, ask before editing.
+Before changing files, check the working tree and existing diff. Preserve pre-existing and concurrent user changes; never reset, discard, overwrite, or include them in your work.
 
-For approved items only, make the smallest coherent set of low-risk fixes:
-- Replace vague copy with short, concrete language grounded in verified CivicSignal behavior. Preserve factual meaning, disclosures, and user intent. Do not invent a more compelling feature or promise.
-- Remove repeated or filler copy only when it is genuinely redundant; retain instructions, context, privacy explanations, and information needed to complete a task.
-- Refine visual patterns only when the observed design is inconsistent, confusing, or unsupported by the product. Prefer the existing brand, components, and dependencies when they work.
-- Keep layout, controls, and copy specific to the resident's task. Make sure each action explains what happens next when that is not already clear.
-- Preserve responsive behavior and accessibility, including semantic structure, keyboard operation, visible focus, readable contrast, useful labels, and reduced-motion preferences where relevant.
-- Apply shared changes consistently to the affected screens, but do not expand the scope to unrelated screens simply to make everything look alike.
+## Step 2 — Identify the user and their context
 
-Implementation safety rules:
-- Change only the exact files and findings approved by me. If implementation reveals that another file or a broader change is needed, stop and request approval before touching it.
-- Make small, reviewable edits. Before each edit, confirm the target file still matches the version inspected; if it changed, stop and ask rather than overwriting it.
-- Do not run auto-formatters or bulk-edit tools across unapproved files. Do not stage, commit, deploy, delete, rename, or move files.
-- Do not run tests or commands that may modify databases, uploads, user data, generated assets, or other project state unless their effects are known and necessary; explain the risk and get approval first.
-- If a check fails or a regression appears, stop, report it, and propose a repair. Do not conceal the failure or perform a broad rollback. Never discard pre-existing or concurrent changes.
+Use the repository and product documentation to identify who uses each screen and what they need to do. At minimum, consider:
+- A resident who may be reporting a frustrating local problem, may be on a phone, may be short on time, and needs to understand what happens after submission.
+- A returning resident who wants to find their report, understand its current status, and see any recorded updates without guessing.
+- An authorized public-service staff member, where applicable, who needs to review reports and record actions clearly.
+- An administrator, where applicable, who configures the service and needs to understand system settings without confusing them with resident tasks.
 
-Hard product boundaries:
-- Do not change routes, workflows, permissions, authentication, report submission, report status/history, API contracts, data handling, storage, or integrations.
-- Do not remove, weaken, or obscure error handling, privacy disclosures, notices, safety information, or accessibility behavior.
-- Do not invent municipal or government partnerships, endorsements, response guarantees, service coverage, users, testimonials, impact metrics, or capabilities. Do not imply official government affiliation unless the product already verifies and states it.
-- Do not add dependencies, replace the design system, or rewrite whole pages for stylistic preference. Avoid unrelated refactors and leave unrelated files untouched.
-- Do not introduce a meaningful user-visible behavior change. If a proposed improvement requires one, it is out of scope unless separately explained and explicitly approved.
+State what each user likely knows, what they may not know, and any relevant constraints such as stress, limited attention, small screens, accessibility needs, or uncertainty about whether a service is official. Do not invent research, interviews, demographics, or user evidence. Label assumptions as assumptions and use existing product evidence where available.
 
-After approved edits:
-1. Review the final status and diff against the baseline. Confirm every changed line belongs to an approved finding and file; call out any unexpected change and stop.
-2. Check the edited screens at relevant narrow and wide viewports if practical. Verify the main report and follow-up flows remain intact. Run only safe, relevant checks. Report exactly what was and was not verified; never claim tests, visual checks, or runtime behavior passed if they were not checked.
-3. Finish with:
-   - a brief audit table showing each finding and the fix made (or why a suggested fix was not made);
-   - a prioritized list of files changed and the reason for each;
-   - any approved findings intentionally left unchanged, with the reason;
-   - an explicit statement of which product behavior and claims were preserved;
-   - checks run and their actual results;
-   - remaining concerns or unverified items.
+## Step 3 — Translate the message into UI principles
 
-If you cannot find evidence-backed, worthwhile improvements that fit these boundaries, say so and leave the code unchanged. Do not manufacture findings to justify edits. No prompt can guarantee zero risk; when uncertain, stop before making a change and ask me.
+Turn each north star into a small, concrete set of design principles before choosing components or styling. Explain how each principle improves the user's task. Examples:
+- Reassure with factual, plain-language explanations and a calm, consistent layout—not promises.
+- Guide with an obvious primary action, useful section headings, and a clear next step.
+- Help users track progress with visible status, dates, and staff updates where the product actually provides them.
+- Reduce effort with concise forms, predictable labels, and mobile-friendly controls.
+- Support trust with accurate disclosures, clear distinction between CivicSignal and public agencies, and no unsupported impact claims.
+
+Review the existing brand and design system first. Reuse existing typography, colors, components, and interaction patterns when they work. Avoid defaulting to common AI-template signals such as a gradient hero, a row of identical rounded cards, excessive pills/badges, generic icon decoration, centered everything, repeated slogans, or oversized marketing claims. These are not automatically wrong; keep them only when there is a concrete reason they help this product and its users.
+
+Do not make a visual change just to make the page different. Each proposed change should improve clarity, hierarchy, task completion, consistency, accessibility, or trust.
+
+## Step 4 — Generate and implement deliberately
+
+Before editing, summarize:
+1. The north star.
+2. The user and context for each screen in scope.
+3. The design principles you will apply.
+4. The specific screens/files and the intended changes.
+5. Any assumptions or product facts that need verification.
+
+Then make the smallest coherent set of implementation changes that achieves the goal. Keep existing routes, workflows, permissions, authentication, report creation, report status/history, integrations, and data handling intact. Do not add dependencies or replace the design system for a cosmetic preference. If a worthwhile change would alter behavior or require expanding scope, explain it and ask before proceeding.
+
+When editing:
+- Use concrete, natural language that explains the real action or outcome. Remove filler and repetition only when the information is genuinely redundant.
+- Keep headings, labels, calls to action, and empty/error states specific to the task and screen.
+- Preserve all accurate product disclosures, safety information, privacy explanations, errors, and user guidance.
+- Do not invent government partnerships, endorsements, service coverage, guaranteed response times, testimonials, user counts, impact metrics, or capabilities.
+- Do not imply that CivicSignal is an emergency service, a government service, or a 311 integration. Keep the existing emergency notice and non-affiliation/independent-prototype disclosure clear and accurate.
+- Keep resident, official, and administrator tasks distinct. Do not expose or imply permissions that the product does not provide.
+- Preserve semantic HTML, keyboard access, visible focus, readable contrast, accessible labels, responsive behavior, and reduced-motion support where relevant.
+- Follow existing code conventions and localization patterns. Avoid unrelated refactors.
+
+If you discover that a change would affect a critical disclosure, safety behavior, privacy, accessibility, or product functionality, stop and explain the issue before making that change.
+
+## Step 5 — Iterate with UX eyes
+
+After implementation, inspect the result rather than assuming the first version is good. Review each changed screen at a narrow mobile width and a wider desktop width if practical. Check the actual page in a browser when available.
+
+Ask and answer:
+- Is the main message clear within a few seconds?
+- Is the most important action or information the most noticeable?
+- Does the layout reflect the user's context and task, rather than a generic template?
+- Is the next step obvious? Are there unnecessary steps, repeated content, or confusing labels?
+- Are status, updates, uncertainty, and limitations explained accurately?
+- Do mobile layout, keyboard use, focus, contrast, labels, and text sizing remain usable?
+- Did any change accidentally weaken a disclosure or alter existing behavior?
+
+Make a follow-up adjustment only when the review identifies a concrete problem; do not keep changing the page for novelty. Run the smallest relevant safe checks (for example, focused tests, lint, or build checks if available). Do not run commands that could alter databases, uploads, or user data unless their effects are understood and necessary.
+
+Finish with:
+1. The north star and user context you used.
+2. The design principles applied and a concise summary of changes, with file links.
+3. Any assumptions or findings that were not verified.
+4. The UX review performed, including viewport/browser checks if actually completed.
+5. Checks run and their actual results. Never claim a check or visual review passed if it was not performed.
+6. Any remaining friction or suggested next iteration.
+
+If the existing experience already serves its purpose well and you cannot identify evidence-backed improvements, say so and leave it unchanged. The goal is a more useful and specific CivicSignal—not novelty, a particular aesthetic trend, or the appearance of human authorship.
 ```
