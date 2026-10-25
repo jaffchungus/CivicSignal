@@ -26,7 +26,12 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/assets/")) {
     const update = fetch(request).then((response) => {
       if (!response.ok) return response;
-      const responseForCache = response.clone();
+      let responseForCache;
+      try {
+        responseForCache = response.clone();
+      } catch {
+        return fetch(request);
+      }
       return caches.open(CACHE)
         .then((cache) => cache.put(request, responseForCache))
         .catch(() => undefined)
