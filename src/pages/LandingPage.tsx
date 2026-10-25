@@ -61,10 +61,10 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
     <section className="landing">
       <div className="landing-hero">
         <div className="landing-copy">
-          <p className="eyebrow">Congressional App Challenge App</p>
-          <h1>A civic app to help solve community issues</h1>
+          <p className="eyebrow">Non-emergency community reporting</p>
+          <h1>Report an issue. Follow its recorded updates.</h1>
           <p className="landing-lede">
-            Choose a category, describe the issue, and see the status changes, official updates, and action history recorded for your report.
+            Submit a non-emergency report, then check back for status changes and updates recorded by staff.
           </p>
           <div className="button-row landing-actions">
             <Link className="button primary" to="/reports/new">
@@ -87,7 +87,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
           <ol className="journey-list">
             <li><span>1</span><div><strong>Choose a category</strong><small>An administrator connects each category to a receiving organization.</small></div></li>
             <li><span>2</span><div><strong>Submit your report</strong><small>This version requires a photo. AI automatically generates the description if configured.</small></div></li>
-            <li><span>3</span><div><strong>Follow the history</strong><small>See status changes, official updates, and who recorded each action—all in one place.</small></div></li>
+            <li><span>3</span><div><strong>Follow the history</strong><small>See each status change, update, and who recorded it.</small></div></li>
           </ol>
           <div className="landing-panel-foot"><Eye aria-hidden="true" size={16} /> A “Resolved” status is what staff recorded; CivicSignal does not independently inspect the work.</div>
         </div>
@@ -101,8 +101,8 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
         </article>
         <article className="card landing-value">
           <Eye aria-hidden="true" size={22} />
-          <h2>A history residents can follow</h2>
-          <p>See the report status, timestamped history, and updates recorded by authorized accounts. The record is not a government record or a response guarantee.</p>
+          <h2>See what staff recorded</h2>
+          <p>Review timestamped status changes and updates from authorized accounts. CivicSignal does not independently verify the work.</p>
         </article>
       </div>
 
