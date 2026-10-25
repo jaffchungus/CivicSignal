@@ -27,7 +27,11 @@ import {
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
 import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
-import { detectProblemInPhoto, detectSimilarReports } from "../ai-photo-analyzer.js";
+import {
+  detectProblemInPhoto,
+  detectSimilarReports,
+  isPhotoAnalysisConfigured,
+} from "../ai-photo-analyzer.js";
 import { sendWebPushToUser } from "../web-push.js";
 import type { PhotoStore } from "../photo-store.js";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
