@@ -27,15 +27,7 @@ import {
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
 import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
-<<<<<<< HEAD
-import {
-  detectProblemInPhoto,
-  detectSimilarReports,
-  isPhotoAnalysisConfigured,
-} from "../ai-photo-analyzer.js";
-=======
 import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
->>>>>>> parent of 082a67f (Updates..)
 import { sendWebPushToUser } from "../web-push.js";
 import type { PhotoStore } from "../photo-store.js";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
@@ -1311,83 +1303,5 @@ export function createReportsRouter(deps: {
     },
   );
 
-<<<<<<< HEAD
-  // Resident feedback endpoint
-  router.post(
-    "/:reportId/feedback",
-    async (request, response) => {
-      const input = residentFeedbackSchema.parse(request.body);
-      const row = await loadReport(database, pathId(request, "reportId"));
-
-      // Allow guest access via token for this endpoint
-      const guestToken = request.headers["x-guest-token"] as string | undefined;
-      if (guestToken) {
-        await assertGuestAccess(row.id, guestToken);
-      } else {
-        const user = currentUser(request);
-        if (!user) {
-          throw new ApiError(401, "UNAUTHORIZED", "Authentication required.");
-        }
-        // Only the reporter can provide feedback
-        if (row.reporter_user_id !== user.id) {
-          throw new ApiError(403, "FORBIDDEN", "Only the reporter can provide feedback on this report.");
-        }
-      }
-
-      const now = Date.now();
-      const feedbackId = randomUUID();
-      const userId = guestToken ? null : (currentUser(request)?.id ?? null);
-
-      await database
-        .prepare(
-          `INSERT INTO resident_feedback (id, report_id, user_id, feedback_type, created_at)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(feedbackId, row.id, userId, input.feedbackType, now);
-
-      await recordReportEvent(database, {
-        reportId: row.id,
-        actorUserId: userId,
-        action: "RESIDENT_FEEDBACK",
-        message: `Resident reported: ${input.feedbackType}`,
-      });
-
-      // If feedback is "STILL_HAPPENING", notify the staff who marked it as resolved
-      if (input.feedbackType === "STILL_HAPPENING" && (row.status === "RESOLVED" || row.status === "CLOSED")) {
-        // Notify staff who handled the original report
-        if (row.assigned_user_id) {
-          await createNotification(database, {
-            userId: row.assigned_user_id,
-            reportId: row.id,
-            type: "PROBLEM_PERSISTENT",
-            title: `Problem reported as still happening: ${row.reference_code}`,
-            message: `A resident reported that the issue at ${row.location} is still happening. Please review the report.`,
-          });
-        }
-
-        // Return to review status
-        await database
-          .prepare("UPDATE reports SET status = 'UNDER_REVIEW', updated_at = ? WHERE id = ?")
-          .run(now, row.id);
-
-        await recordReportEvent(database, {
-          reportId: row.id,
-          actorUserId: userId,
-          action: "REPORT_STATUS_CHANGED",
-          fromStatus: row.status,
-          toStatus: "UNDER_REVIEW",
-          message: "Resident reported problem is still happening",
-        });
-      }
-
-      // Return the updated report
-      const refreshed = await loadReport(database, row.id);
-      const viewer = userId ? { id: userId, role: "RESIDENT" as const, organizationId: null } : { id: "", role: "RESIDENT" as const, organizationId: null };
-      response.json(await serializeDetail(database, refreshed, viewer));
-    },
-  );
-
-=======
->>>>>>> parent of 082a67f (Updates..)
   return router;
 }

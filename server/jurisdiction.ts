@@ -56,65 +56,6 @@ export async function resolveMunicipalityRepresentative(
     .get()) as { value: string } | undefined;
   const municipalityName = municipalityRow?.value || "Municipality";
 
-<<<<<<< HEAD
-  let targetMunicipalityName = defaultMunicipalityName;
-
-  // If municipality ID is provided, get its name
-  if (municipalityId) {
-    const mun = (await database
-      .prepare("SELECT name FROM municipalities WHERE id = ?")
-      .get(municipalityId)) as { name: string } | undefined;
-    if (mun) {
-      targetMunicipalityName = mun.name;
-    }
-  }
-
-  // Parse coordinates from location if available
-  const coords = location ? extractCoordinates(location) : null;
-
-  // Find active, verified staff members in the responsible organization
-  let staff: Array<{
-    id: string;
-    display_name: string;
-    role: "OFFICIAL" | "LAW_ENFORCEMENT";
-    organization_id: string;
-    organization_name: string;
-    municipality_id: string | null;
-  }> = [];
-
-  if (municipalityId) {
-    // First try to find staff in the specified municipality
-    staff = (await database
-      .prepare(
-        `SELECT users.id, users.display_name, users.role, users.organization_id,
-                organizations.name AS organization_name, users.municipality_id
-         FROM users
-         JOIN organizations ON organizations.id = users.organization_id
-         WHERE users.organization_id = ?
-           AND users.status = 'ACTIVE'
-           AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
-           AND users.municipality_id = ?
-         ORDER BY users.created_at ASC`,
-      )
-      .all(organizationId, municipalityId)) as typeof staff;
-  }
-
-  // If no staff in target municipality, try organization-wide
-  if (!staff || staff.length === 0) {
-    staff = (await database
-      .prepare(
-        `SELECT users.id, users.display_name, users.role, users.organization_id,
-                organizations.name AS organization_name, users.municipality_id
-         FROM users
-         JOIN organizations ON organizations.id = users.organization_id
-         WHERE users.organization_id = ?
-           AND users.status = 'ACTIVE'
-           AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
-         ORDER BY users.created_at ASC`,
-      )
-      .all(organizationId)) as typeof staff;
-  }
-=======
   // Find active, verified staff members in the responsible organization deterministically
   const staff = (await database
     .prepare(
@@ -134,7 +75,6 @@ export async function resolveMunicipalityRepresentative(
       organization_id: string;
       organization_name: string;
     }>;
->>>>>>> parent of 082a67f (Updates..)
 
   if (staff.length === 0) {
     // If no verified staff member is assigned yet, check if any active staff exists in municipality
@@ -180,4 +120,3 @@ export async function resolveMunicipalityRepresentative(
     municipalityName,
   };
 }
-
