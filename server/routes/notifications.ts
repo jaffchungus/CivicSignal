@@ -60,13 +60,33 @@ export function createNotificationsRouter(deps: {
     }
 
     const now = Date.now();
-    await database.prepare(
-      `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (endpoint) DO UPDATE SET
-         user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
-         updated_at = EXCLUDED.updated_at`,
-    ).run(randomUUID(), user.id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth, now, now);
+    await database.transaction(async () => {
+      // Locking the account row serializes the check and insert across instances.
+      await database.prepare("UPDATE users SET updated_at = updated_at WHERE id = ?").run(user.id);
+      const owned = await database
+        .prepare("SELECT user_id FROM push_subscriptions WHERE endpoint = ?")
+        .get(subscription.endpoint) as { user_id: string } | undefined;
+      if (owned?.user_id !== user.id) {
+        const { deviceCount } = (await database.prepare(
+          "SELECT COUNT(*) AS deviceCount FROM push_subscriptions WHERE user_id = ?",
+        ).get(user.id)) as { deviceCount: number };
+        if (deviceCount >= 10) {
+          throw new ApiError(
+            409,
+            "PUSH_DEVICE_LIMIT",
+            "This account has reached the limit for alert devices. Remove an old device first.",
+          );
+        }
+      }
+
+      await database.prepare(
+        `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (endpoint) DO UPDATE SET
+           user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
+           updated_at = EXCLUDED.updated_at`,
+      ).run(randomUUID(), user.id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth, now, now);
+    });
     response.status(204).end();
   });
 

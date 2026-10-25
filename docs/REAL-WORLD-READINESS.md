@@ -9,7 +9,7 @@ This repository contains a working report-to-staff workflow, but it is not confi
 3. Register staff accounts and verify each person into the correct organization. A verified staff member may claim a report; only members of that organization can act on its queue.
 4. Publish the operator identity, a verified organization contact route, applicable privacy terms, and a retention policy before inviting real residents.
 
-When a resident submits a report, CivicSignal records the category, receiving organization, status, report history, and optional photo. A guest report returns a random access token once. The browser places it in a URL fragment so it is not sent with ordinary page or referrer requests; report and photo API reads require the token in a request header. The database stores only the token hash. Guest links expire after 90 days. The report and photo themselves are not automatically deleted.
+When a resident submits a report, CivicSignal records the category, receiving organization, status, report history, and optional photo. A guest report returns a random access token once. The browser places it in a URL fragment so it is not sent with ordinary page or referrer requests; report and photo API reads require the token in a request header. The database stores only the token hash. Guest links expire after 90 days. Administrator removal makes the report and its photos inaccessible through the guest link as well. The report and photo themselves are not automatically deleted.
 
 ## Provider and operational configuration still required
 

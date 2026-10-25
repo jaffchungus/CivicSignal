@@ -72,6 +72,22 @@ export async function destroySession(
   response.clearCookie(SESSION_COOKIE, { path: "/" });
 }
 
+/** Removes every other session for a user after a credential change. */
+export async function revokeOtherSessions(
+  database: CivicDatabase,
+  request: Request,
+  userId: string,
+): Promise<void> {
+  const token = request.cookies?.[SESSION_COOKIE] as string | undefined;
+  if (!token) {
+    await database.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+    return;
+  }
+  await database
+    .prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?")
+    .run(userId, sessionHash(token));
+}
+
 /** Resolves the session user and rejects unauthenticated or inactive accounts. */
 export function authenticate(database: CivicDatabase): RequestHandler {
   return async (request, _response, next) => {

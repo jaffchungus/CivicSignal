@@ -224,6 +224,13 @@ function assertCanView(
   }
 }
 
+/** Guest-token access follows reporter visibility, including moderation removal. */
+function assertGuestCanView(row: ReportRow): void {
+  if (row.reporter_user_id !== null || row.moderation_status === "REMOVED") {
+    throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+  }
+}
+
 /** Official workflow actions are limited to verified staff of the handling organization. */
 function assertCanManage(
   row: ReportRow,
@@ -889,9 +896,7 @@ export function createReportsRouter(deps: {
     const reportId = pathId(request, "reportId");
     await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
     const row = await loadReport(database, reportId);
-    if (row.reporter_user_id !== null) {
-      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
-    }
+    assertGuestCanView(row);
     response.json(await serializeDetail(database, row, {
       id: "",
       role: "RESIDENT",
@@ -903,9 +908,7 @@ export function createReportsRouter(deps: {
     const reportId = pathId(request, "reportId");
     await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
     const row = await loadReport(database, reportId);
-    if (row.reporter_user_id !== null) {
-      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
-    }
+    assertGuestCanView(row);
     response.json(await recordStillHappening(row, null));
   });
 
@@ -913,6 +916,8 @@ export function createReportsRouter(deps: {
     const reportId = pathId(request, "reportId");
     const attachmentId = pathId(request, "attachmentId");
     await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
+    const row = await loadReport(database, reportId);
+    assertGuestCanView(row);
     const attachment = (await database
       .prepare("SELECT stored_name, content_type FROM attachments WHERE id = ? AND report_id = ?")
       .get(attachmentId, reportId)) as { stored_name: string; content_type: string } | undefined;
