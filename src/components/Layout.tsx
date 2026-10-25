@@ -50,7 +50,7 @@ export function Layout() {
                       ? { title: "Report details", description: "View the recorded status, official updates, and history for a CivicSignal report." }
                       : user
                         ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
-                        : { title: "Community issue reporting", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
+                        : { title: "Congressional App Challenge Participant", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
     document.title = `${page.title} · CivicSignal`;
     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
     if (description) description.content = page.description;

@@ -61,7 +61,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
     <section className="landing">
       <div className="landing-hero">
         <div className="landing-copy">
-          <p className="eyebrow">Community issue reporting</p>
+          <p className="eyebrow">Congressional App Challenge Participant</p>
           <h1>Report a local issue. Follow its updates.</h1>
           <p className="landing-lede">
             Send a non-emergency report to an organization configured for this community. Come back here to see any updates its staff record.
