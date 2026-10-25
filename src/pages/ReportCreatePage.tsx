@@ -5,6 +5,7 @@ import { Field } from "../components/Field";
 import { ApiRequestError, api } from "../lib/api";
 import { useAction, useFetch } from "../lib/hooks";
 import { useAuth } from "../lib/auth";
+import { clearDraftPhoto, loadDraftPhoto, saveDraftPhoto } from "../lib/report-photo-draft";
 import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
 import { isCoordinateOnlyLocation } from "../../shared/report-location";
 import type { Category, PhotoAnalysisResult, Report } from "../../shared/contracts";
@@ -43,8 +44,13 @@ function readDraft(key: string): Draft {
   }
 }
 
-function removeDraft(key: string): void {
+function removeDraftText(key: string): void {
   try { localStorage.removeItem(key); } catch { /* Draft storage is optional. */ }
+}
+
+function removeDraft(key: string): void {
+  removeDraftText(key);
+  void clearDraftPhoto(key);
 }
 
 export function ReportCreatePage() {
@@ -52,11 +58,16 @@ export function ReportCreatePage() {
   const { user, loading: authLoading } = useAuth();
   const identity = user?.id ?? "guest";
   const draftKey = `civicsignal.report-draft.${identity}`;
-  const identityRef = useRef(identity);
+  const activeIdentityRef = useRef<string | null>(null);
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
   const photoAnalysisRequestId = useRef(0);
   const locationRequestId = useRef(0);
-  const [form, setForm] = useState<Draft>(() => readDraft(draftKey));
-  const changingIdentity = identityRef.current !== identity;
+  const skipPhotoAnalysisFor = useRef<File | null>(null);
+  const [form, setForm] = useState<Draft>(emptyDraft);
+  const [draftReady, setDraftReady] = useState(false);
+  const [loadedIdentity, setLoadedIdentity] = useState<string | null>(null);
+  const changingIdentity = !authLoading && loadedIdentity !== identity;
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -79,6 +90,8 @@ export function ReportCreatePage() {
     setPhotoError(null);
     setAnalyzingPhoto(false);
     setForm((current) => ({ ...current, categoryId: "" }));
+    if (file) void saveDraftPhoto(draftKey, file);
+    else void clearDraftPhoto(draftKey);
   }
 
   const requestPhotoSuggestions = useCallback(async (file: File) => {
@@ -93,6 +106,7 @@ export function ReportCreatePage() {
         setPhotoError("This image appears to be spam and cannot be submitted. Please choose a real photo of a civic issue.");
         setPhoto(null);
         setPhotoPreview(null);
+        void clearDraftPhoto(draftKeyRef.current);
         setForm((current) => ({ ...current, categoryId: "" }));
         return;
       }
@@ -166,24 +180,47 @@ export function ReportCreatePage() {
   }
 
   useEffect(() => {
-    if (identityRef.current === identity) return;
+    if (authLoading || activeIdentityRef.current === identity) return;
+    const previousIdentity = activeIdentityRef.current;
     photoAnalysisRequestId.current += 1;
     locationRequestId.current += 1;
-    removeDraft(`civicsignal.report-draft.${identityRef.current}`);
-    identityRef.current = identity;
-    setForm(emptyDraft);
+    if (previousIdentity !== null) {
+      removeDraft(`civicsignal.report-draft.${previousIdentity}`);
+    }
+    activeIdentityRef.current = identity;
+    setLoadedIdentity(identity);
+    const restored = readDraft(draftKey);
+    setForm(restored);
     setPhoto(null);
+    setPhotoPreview(null);
     setPhotoError(null);
     setAnalyzingPhoto(false);
     setStep("details");
+    setLocationMessage("");
+    setLocationLookupBusy(false);
+    setResolvingAddress(false);
     setHasDraft(false);
-  }, [identity]);
+    setDraftReady(true);
+
+    const selectionVersion = photoAnalysisRequestId.current;
+    void loadDraftPhoto(draftKey).then((file) => {
+      if (
+        !file ||
+        activeIdentityRef.current !== identity ||
+        photoAnalysisRequestId.current !== selectionVersion
+      ) return;
+      // A restored draft that already has an AI-selected category does not
+      // need another provider call; reuse the saved classification.
+      if (restored.categoryId) skipPhotoAnalysisFor.current = file;
+      setPhoto(file);
+    });
+  }, [authLoading, draftKey, identity]);
 
   useEffect(() => {
-    if (authLoading || changingIdentity) return;
+    if (authLoading || changingIdentity || !draftReady) return;
     const serialized = JSON.stringify(form);
     if (serialized === JSON.stringify(emptyDraft)) {
-      removeDraft(draftKey);
+      removeDraftText(draftKey);
       setHasDraft(false);
       return;
     }
@@ -193,7 +230,7 @@ export function ReportCreatePage() {
     } catch {
       setHasDraft(false);
     }
-  }, [authLoading, changingIdentity, draftKey, form]);
+  }, [authLoading, changingIdentity, draftKey, draftReady, form]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -255,7 +292,12 @@ export function ReportCreatePage() {
     : null;
 
   useEffect(() => {
-    if (photo && photoAnalysisConfigured) void requestPhotoSuggestions(photo);
+    if (!photo || !photoAnalysisConfigured) return;
+    if (skipPhotoAnalysisFor.current === photo) {
+      skipPhotoAnalysisFor.current = null;
+      return;
+    }
+    void requestPhotoSuggestions(photo);
   }, [photo, photoAnalysisConfigured, requestPhotoSuggestions]);
 
   useEffect(() => {
@@ -268,7 +310,7 @@ export function ReportCreatePage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
 
-  if (authLoading || changingIdentity) return <p className="centered" role="status">Preparing your report…</p>;
+  if (authLoading || changingIdentity || !draftReady) return <p className="centered" role="status">Preparing your report…</p>;
 
   return (
     <section className="card report-composer">
@@ -286,7 +328,7 @@ export function ReportCreatePage() {
       <aside className="emergency-notice" role="note">
         <strong>Not for emergencies.</strong> This civic app is not monitored for urgent situations. If someone is in immediate danger, call 911.
       </aside>
-      <p className="muted draft-note">Incomplete text is saved in this browser for this account or guest session. Selected photos are not saved with a draft.</p>
+      <p className="muted draft-note">Your draft, including the selected photo, is saved in this browser for this account or guest session. Use “Discard saved draft” to remove it.</p>
 
       {categoriesError && (
         <div className="error" role="alert">
@@ -338,6 +380,7 @@ export function ReportCreatePage() {
                           event.currentTarget.value = "";
                           setPhoto(null);
                           setPhotoPreview(null);
+                          void clearDraftPhoto(draftKey);
                           setPhotoError("Choose a photo that is 4 MiB or smaller.");
                           setAnalyzingPhoto(false);
                           return;
@@ -360,6 +403,7 @@ export function ReportCreatePage() {
                           event.currentTarget.value = "";
                           setPhoto(null);
                           setPhotoPreview(null);
+                          void clearDraftPhoto(draftKey);
                           setPhotoError("Choose a photo that is 4 MiB or smaller.");
                           setAnalyzingPhoto(false);
                           return;
@@ -449,7 +493,7 @@ export function ReportCreatePage() {
               >
                 Review report
               </button>
-              {hasDraft && <button className="button" type="button" onClick={discardDraft}>Discard saved draft</button>}
+              {(hasDraft || photo) && <button className="button" type="button" onClick={discardDraft}>Discard saved draft</button>}
             </div>
           </>
         ) : (

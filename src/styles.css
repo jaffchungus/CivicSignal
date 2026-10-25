@@ -378,10 +378,11 @@ p {
 
 .landing-process-heading {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
   margin-bottom: 1.2rem;
+  text-align: center;
 }
 
 .landing-process-heading h2 {
@@ -1523,7 +1524,7 @@ input[type="file"].input {
   }
 
   .landing-process-heading {
-    align-items: flex-start;
+    align-items: center;
     flex-direction: column;
     gap: 0.35rem;
   }
