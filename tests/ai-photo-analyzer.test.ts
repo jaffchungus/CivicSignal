@@ -69,6 +69,17 @@ describe("Gemini photo analysis", () => {
       data: image.toString("base64"),
     });
     expect(requestBody.contents[0].parts[0].text).toContain("Public Works");
+    expect(requestBody.generationConfig).toMatchObject({
+      responseMimeType: "application/json",
+      responseSchema: {
+        properties: {
+          suggestedCategoryId: { enum: ["roads", ""] },
+        },
+        required: expect.arrayContaining(["suggestedCategoryId", "isSpam"]),
+      },
+      thinkingConfig: { thinkingLevel: "minimal" },
+      maxOutputTokens: 1024,
+    });
     expect(result.problem).toBe("A pothole is visible in the road.");
     expect(result.suggestedCategoryId).toBe("roads");
   });
