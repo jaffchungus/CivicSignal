@@ -1,4 +1,4 @@
-const CACHE = "civicsignal-shell-v2";
+const CACHE = "civicsignal-shell-v3";
 const APP_SHELL = ["/", "/offline.html", "/manifest.webmanifest", "/favicon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -24,13 +24,16 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (url.pathname.startsWith("/assets/")) {
-    event.respondWith(caches.match(request).then((cached) => {
-      const update = fetch(request).then((response) => {
-        if (response.ok) void caches.open(CACHE).then((cache) => cache.put(request, response.clone()));
-        return response;
-      });
-      return cached || update;
-    }));
+    const update = fetch(request).then((response) => {
+      if (!response.ok) return response;
+      const responseForCache = response.clone();
+      return caches.open(CACHE)
+        .then((cache) => cache.put(request, responseForCache))
+        .catch(() => undefined)
+        .then(() => response);
+    });
+    event.waitUntil(update.then(() => undefined, () => undefined));
+    event.respondWith(caches.match(request).then((cached) => cached || update));
   }
 });
 

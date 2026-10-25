@@ -45,6 +45,9 @@ describe("public metadata assets", () => {
     const worker = readFileSync(path.join(publicDirectory, "sw.js"), "utf8");
     expect(worker).toContain("/offline.html");
     expect(worker).toContain('url.pathname.startsWith("/api/")');
+    const assetUpdate = worker.slice(worker.indexOf("const update = fetch(request)"));
+    expect(assetUpdate.indexOf("const responseForCache = response.clone()"))
+      .toBeLessThan(assetUpdate.indexOf("caches.open(CACHE)"));
     expect(readFileSync(path.join(publicDirectory, "offline.html"), "utf8")).toContain("Your saved report draft remains on this device.");
   });
 });
