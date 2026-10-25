@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { detectProblemInPhoto, isPhotoAnalysisConfigured } from "../server/ai-photo-analyzer.js";
 
-const successfulResponse = {
+const successfulResponse: {
+  candidates: Array<{ content: { parts: Array<{ text: string; thought?: boolean }> } }>;
+} = {
   candidates: [
     {
       content: {
@@ -69,6 +71,28 @@ describe("Gemini photo analysis", () => {
     expect(requestBody.contents[0].parts[0].text).toContain("Public Works");
     expect(result.problem).toBe("A pothole is visible in the road.");
     expect(result.suggestedCategoryId).toBe("roads");
+  });
+
+  it("ignores Gemini thought parts and parses the final JSON response", async () => {
+    const responseWithThought = structuredClone(successfulResponse);
+    responseWithThought.candidates[0].content.parts.unshift({
+      text: "I should inspect the image and choose a category.",
+      thought: true,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(responseWithThought), { status: 200 }),
+    ));
+
+    await expect(detectProblemInPhoto(Buffer.from("image"), "image/png", [{
+      id: "roads",
+      name: "Roads and Sidewalks",
+      description: "Road and sidewalk repairs",
+      organizationName: "Public Works",
+    }]))
+      .resolves.toMatchObject({
+        problem: "A pothole is visible in the road.",
+        suggestedCategoryId: "roads",
+      });
   });
 
   it("reports missing configuration instead of inventing a photo analysis", async () => {

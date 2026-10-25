@@ -16,6 +16,7 @@ interface GeminiResponse {
     content?: {
       parts?: Array<{
         text?: string;
+        thought?: boolean;
       }>;
     };
   }>;
@@ -114,7 +115,8 @@ Return only a JSON object with this shape:
     throw invalidProviderResponse();
   }
 
-  const text = data.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text;
+  const text = data.candidates?.[0]?.content?.parts
+    ?.find((part) => part.thought !== true && typeof part.text === "string")?.text;
   if (!text) throw invalidProviderResponse();
 
   let parsed: Record<string, unknown>;
