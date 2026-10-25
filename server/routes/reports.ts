@@ -27,11 +27,15 @@ import {
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
 import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
+<<<<<<< HEAD
 import {
   detectProblemInPhoto,
   detectSimilarReports,
   isPhotoAnalysisConfigured,
 } from "../ai-photo-analyzer.js";
+=======
+import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
+>>>>>>> parent of 082a67f (Updates..)
 import { sendWebPushToUser } from "../web-push.js";
 import type { PhotoStore } from "../photo-store.js";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
@@ -110,8 +114,6 @@ type ReportRow = {
   assigned_user_id: string | null;
   assigned_display_name: string | null;
   assigned_role: UserRole | null;
-  municipality_id: string | null;
-  municipality_name: string | null;
 };
 
 const REPORT_SELECT = `
@@ -125,12 +127,10 @@ const REPORT_SELECT = `
          organizations.kind AS organization_kind,
          reporter.id AS reporter_user_id, reporter.display_name AS reporter_display_name,
          assignee.id AS assigned_user_id, assignee.display_name AS assigned_display_name,
-         assignee.role AS assigned_role,
-         reports.municipality_id, municipalities.name AS municipality_name
+         assignee.role AS assigned_role
   FROM reports
   JOIN categories ON categories.id = reports.category_id
   JOIN organizations ON organizations.id = reports.organization_id
-  LEFT JOIN municipalities ON municipalities.id = reports.municipality_id
   LEFT JOIN users AS reporter ON reporter.id = reports.reporter_user_id
   LEFT JOIN users AS assignee ON assignee.id = reports.assigned_user_id`;
 
@@ -141,7 +141,6 @@ const coordinateSchema = z.preprocess(
 
 const createReportSchema = z.object({
   categoryId: z.string().trim().min(1),
-  municipalityId: z.string().trim().min(1).optional(),
   title: z.string().trim().max(140).optional().default(""),
   description: z.string().trim().max(4000).optional().default(""),
   location: z.string().trim().max(300).optional().default(""),
@@ -186,10 +185,6 @@ const impactQuerySchema = z.object({
 
 const updateSchema = z.object({
   message: z.string().trim().min(1).max(4000),
-});
-
-const residentFeedbackSchema = z.object({
-  feedbackType: z.enum(["STILL_HAPPENING", "DONT_KNOW", "FIXED"]),
 });
 
 const handoffSchema = z.object({
@@ -296,8 +291,6 @@ function serializeSummary(row: ReportRow) {
       : null,
     submittedAt: isoTime(row.created_at),
     updatedAt: isoTime(row.updated_at),
-    municipalityId: row.municipality_id,
-    municipalityName: row.municipality_name,
   };
 }
 
@@ -366,7 +359,6 @@ async function serializeDetail(
     database,
     row.organization_id,
     row.location,
-    row.municipality_id ?? undefined,
   );
 
   return {
@@ -544,7 +536,6 @@ export function createReportsRouter(deps: {
     const latitude = input.latitude ?? null;
     const longitude = input.longitude ?? null;
     const accuracyMeters = input.accuracyMeters ?? null;
-    const municipalityId = input.municipalityId ?? null;
     const now = Date.now();
     const reportId = randomUUID();
     const file = request.file;
@@ -566,32 +557,6 @@ export function createReportsRouter(deps: {
     }
     const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
 
-    // Check for similar reports at this location
-    let similarReports: Array<{ similarReportId: string; similarityScore: number; matchedByAi: boolean; reason: string }> = [];
-    if (latitude !== null && longitude !== null && isPhotoAnalysisConfigured()) {
-      const nearbyReports = (await database
-        .prepare(
-          `SELECT id, title, categories.name AS category, location, latitude, longitude
-           FROM reports
-           JOIN categories ON categories.id = reports.category_id
-           WHERE reports.latitude IS NOT NULL
-             AND reports.longitude IS NOT NULL
-             AND reports.status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS')
-             AND reports.moderation_status = 'VISIBLE'
-           LIMIT 20`
-        )
-        .all()) as Array<{
-        id: string;
-        title: string;
-        category: string;
-        location: string;
-        latitude: number;
-        longitude: number;
-      }>;
-
-      similarReports = await detectSimilarReports(file.buffer, fileContentType, nearbyReports);
-    }
-
     let referenceCode = "";
     let pushRecipients: string[] = [];
     await database.transaction(async () => {
@@ -600,9 +565,9 @@ export function createReportsRouter(deps: {
         .prepare(
           `INSERT INTO reports
             (id, reference_code, title, description, location, latitude, longitude, accuracy_meters, category_id,
-             organization_id, reporter_user_id, assigned_user_id, municipality_id, status,
+             organization_id, reporter_user_id, assigned_user_id, status,
              moderation_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'SUBMITTED', 'VISIBLE', ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?)`,
         )
         .run(
           reportId,
@@ -616,20 +581,9 @@ export function createReportsRouter(deps: {
           category.id,
           category.organization_id,
           reporterUserId,
-          municipalityId,
           now,
           now,
         );
-
-      // Store similarity matches
-      for (const similar of similarReports) {
-        await database
-          .prepare(
-            `INSERT INTO report_similarity (id, primary_report_id, similar_report_id, similarity_score, matched_by_ai, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .run(randomUUID(), reportId, similar.similarReportId, similar.similarityScore, similar.matchedByAi ? 1 : 0, now);
-      }
 
       if (guestToken) {
         await database
@@ -1357,6 +1311,7 @@ export function createReportsRouter(deps: {
     },
   );
 
+<<<<<<< HEAD
   // Resident feedback endpoint
   router.post(
     "/:reportId/feedback",
@@ -1432,5 +1387,7 @@ export function createReportsRouter(deps: {
     },
   );
 
+=======
+>>>>>>> parent of 082a67f (Updates..)
   return router;
 }

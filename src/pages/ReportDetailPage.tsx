@@ -250,6 +250,7 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
           !report.timeline?.some((event) => event.action === "REPORT_STILL_HAPPENING") && (
           <div className="resident-follow-up">
             <h2>Is this still happening?</h2>
+<<<<<<< HEAD
             <p className="muted">Your feedback is recorded for staff to review. It does not reveal your location to other residents.</p>
             <div className="button-row">
               <button
@@ -304,6 +305,19 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
                 }}
               >It's fixed</button>
             </div>
+=======
+            <p className="muted">Your confirmation is recorded for staff to review. It does not reveal your location to other residents.</p>
+            <button
+              className="button"
+              disabled={busy}
+              onClick={() => {
+                const action = publicTracking && guestToken
+                  ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
+                  : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
+                void run(action, "Your follow-up was recorded for the responsible organization.");
+              }}
+            >Still happening</button>
+>>>>>>> parent of 082a67f (Updates..)
           </div>
         )}
 

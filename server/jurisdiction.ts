@@ -40,26 +40,23 @@ export type MunicipalRepresentativeInfo = {
   organizationId: string;
   organizationName: string;
   municipalityName: string;
-  distanceMeters?: number;
 };
 
 /**
  * Deterministically resolves the nearest municipal representative for a given
  * organization and location using code (no AI).
- * If municipalityId is provided, searches within that municipality first.
- * Falls back to nearest officer if no staff available in target municipality.
  */
 export async function resolveMunicipalityRepresentative(
   database: CivicDatabase,
   organizationId: string,
-  location?: string,
-  municipalityId?: string,
+  _location?: string,
 ): Promise<MunicipalRepresentativeInfo | null> {
   const municipalityRow = (await database
     .prepare("SELECT value FROM settings WHERE key = 'municipality_name'")
     .get()) as { value: string } | undefined;
-  const defaultMunicipalityName = municipalityRow?.value || "Municipality";
+  const municipalityName = municipalityRow?.value || "Municipality";
 
+<<<<<<< HEAD
   let targetMunicipalityName = defaultMunicipalityName;
 
   // If municipality ID is provided, get its name
@@ -117,41 +114,34 @@ export async function resolveMunicipalityRepresentative(
       )
       .all(organizationId)) as typeof staff;
   }
+=======
+  // Find active, verified staff members in the responsible organization deterministically
+  const staff = (await database
+    .prepare(
+      `SELECT users.id, users.display_name, users.role, users.organization_id,
+              organizations.name AS organization_name
+       FROM users
+       JOIN organizations ON organizations.id = users.organization_id
+       WHERE users.organization_id = ?
+         AND users.status = 'ACTIVE'
+         AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+       ORDER BY users.created_at ASC`,
+    )
+    .all(organizationId)) as Array<{
+      id: string;
+      display_name: string;
+      role: "OFFICIAL" | "LAW_ENFORCEMENT";
+      organization_id: string;
+      organization_name: string;
+    }>;
+>>>>>>> parent of 082a67f (Updates..)
 
   if (staff.length === 0) {
-    // Fallback: find nearest active staff across all organizations in the same municipality
-    if (municipalityId && coords) {
-      const nearestStaff = (await database
-        .prepare(
-          `SELECT users.id, users.display_name, users.role, users.organization_id,
-                  organizations.name AS organization_name, users.municipality_id
-           FROM users
-           JOIN organizations ON organizations.id = users.organization_id
-           WHERE users.status = 'ACTIVE'
-             AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
-             AND users.municipality_id = ?
-           ORDER BY users.created_at ASC
-           LIMIT 1`,
-        )
-        .get(municipalityId)) as typeof staff[0] | undefined;
-
-      if (nearestStaff) {
-        return {
-          id: nearestStaff.id,
-          displayName: nearestStaff.display_name,
-          role: nearestStaff.role,
-          organizationId: nearestStaff.organization_id,
-          organizationName: nearestStaff.organization_name,
-          municipalityName: targetMunicipalityName,
-        };
-      }
-    }
-
-    // Final fallback: any active staff in the system
+    // If no verified staff member is assigned yet, check if any active staff exists in municipality
     const fallbackStaff = (await database
       .prepare(
         `SELECT users.id, users.display_name, users.role, users.organization_id,
-                organizations.name AS organization_name, users.municipality_id
+                organizations.name AS organization_name
          FROM users
          JOIN organizations ON organizations.id = users.organization_id
          WHERE users.status = 'ACTIVE'
@@ -159,7 +149,15 @@ export async function resolveMunicipalityRepresentative(
          ORDER BY users.created_at ASC
          LIMIT 1`,
       )
-      .get()) as typeof staff[0] | undefined;
+      .get()) as
+      | {
+          id: string;
+          display_name: string;
+          role: "OFFICIAL" | "LAW_ENFORCEMENT";
+          organization_id: string;
+          organization_name: string;
+        }
+      | undefined;
 
     if (!fallbackStaff) return null;
     return {
@@ -168,7 +166,7 @@ export async function resolveMunicipalityRepresentative(
       role: fallbackStaff.role,
       organizationId: fallbackStaff.organization_id,
       organizationName: fallbackStaff.organization_name,
-      municipalityName: targetMunicipalityName,
+      municipalityName,
     };
   }
 
@@ -179,7 +177,7 @@ export async function resolveMunicipalityRepresentative(
     role: primary.role,
     organizationId: primary.organization_id,
     organizationName: primary.organization_name,
-    municipalityName: targetMunicipalityName,
+    municipalityName,
   };
 }
 
