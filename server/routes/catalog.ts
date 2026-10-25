@@ -18,6 +18,27 @@ export function createCatalogRouter(deps: { database: CivicDatabase; photoStorag
     response.json({ organizations });
   });
 
+  router.get("/municipalities", async (_request, response) => {
+    const municipalities = (await database
+      .prepare("SELECT id, name, boundary_geojson AS boundaryGeojson, created_at AS createdAt, updated_at AS updatedAt FROM municipalities ORDER BY name")
+      .all()) as Array<{
+      id: string;
+      name: string;
+      boundaryGeojson: string | null;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+    response.json({
+      municipalities: municipalities.map((m) => ({
+        id: m.id,
+        name: m.name,
+        boundaryGeojson: m.boundaryGeojson,
+        createdAt: new Date(m.createdAt).toISOString(),
+        updatedAt: new Date(m.updatedAt).toISOString(),
+      })),
+    });
+  });
+
   router.get("/categories", async (_request, response) => {
     const categories = await database
       .prepare(

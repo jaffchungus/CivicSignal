@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { ReportTable } from "../components/ReportTable";
+import { ReportMap } from "../components/ReportMap";
 import { useAuth } from "../lib/auth";
 import { useFetch } from "../lib/hooks";
 import { formatDate } from "../lib/format";
@@ -16,6 +17,7 @@ function ResidentHome() {
   const list = useFetch<ReportListResponse>("/api/reports?scope=mine");
   const reports = list.data?.reports ?? [];
   const { loading, error } = list;
+  const [viewMode, setViewMode] = useState<"table" | "map">("table");
 
   return (
     <section>
@@ -26,9 +28,23 @@ function ResidentHome() {
             Track the issues you have reported and review updates recorded by their receiving organizations.
           </p>
         </div>
-        <Link className="button primary" to="/reports/new">
-          Report an issue
-        </Link>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            className={`button ${viewMode === "table" ? "primary" : ""}`}
+            onClick={() => setViewMode("table")}
+          >
+            Table View
+          </button>
+          <button
+            className={`button ${viewMode === "map" ? "primary" : ""}`}
+            onClick={() => setViewMode("map")}
+          >
+            Map View
+          </button>
+          <Link className="button primary" to="/reports/new">
+            Report an issue
+          </Link>
+        </div>
       </div>
       {error && (
         <div className="error" role="alert">
@@ -49,6 +65,8 @@ function ResidentHome() {
             Report your first issue
           </Link>
         </div>
+      ) : viewMode === "map" ? (
+        <ReportMap reports={reports.filter(r => r.coordinates)} />
       ) : (
         <ReportTable reports={reports} />
       )}
@@ -61,6 +79,7 @@ function StaffHome() {
   const [categoryId, setCategoryId] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"table" | "map">("table");
   const { user } = useAuth();
 
   const params = new URLSearchParams({ scope: "queue" });
@@ -123,6 +142,21 @@ function StaffHome() {
           </>
         )}
       </section>
+
+      <div style={{ marginBottom: "16px", display: "flex", gap: "8px" }}>
+        <button
+          className={`button ${viewMode === "table" ? "primary" : ""}`}
+          onClick={() => setViewMode("table")}
+        >
+          Table View
+        </button>
+        <button
+          className={`button ${viewMode === "map" ? "primary" : ""}`}
+          onClick={() => setViewMode("map")}
+        >
+          Map View
+        </button>
+      </div>
 
       <form
         className="filters"
@@ -194,7 +228,11 @@ function StaffHome() {
           <p className="muted">
             {total} report{total === 1 ? "" : "s"}
           </p>
-          <ReportTable reports={reports} />
+          {viewMode === "map" ? (
+            <ReportMap reports={reports.filter(r => r.coordinates)} />
+          ) : (
+            <ReportTable reports={reports} />
+          )}
         </>
       )}
     </section>

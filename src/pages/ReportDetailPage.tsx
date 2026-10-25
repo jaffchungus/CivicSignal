@@ -250,17 +250,60 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
           !report.timeline?.some((event) => event.action === "REPORT_STILL_HAPPENING") && (
           <div className="resident-follow-up">
             <h2>Is this still happening?</h2>
-            <p className="muted">Your confirmation is recorded for staff to review. It does not reveal your location to other residents.</p>
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() => {
-                const action = publicTracking && guestToken
-                  ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
-                  : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
-                void run(action, "Your follow-up was recorded for the responsible organization.");
-              }}
-            >Still happening</button>
+            <p className="muted">Your feedback is recorded for staff to review. It does not reveal your location to other residents.</p>
+            <div className="button-row">
+              <button
+                className="button danger"
+                disabled={busy}
+                onClick={() => {
+                  const action = publicTracking && guestToken
+                    ? () => api.postWithGuestAccess<{ success: boolean; feedbackId: string }>(
+                        `/api/reports/${report.id}/feedback`,
+                        { feedbackType: "STILL_HAPPENING" },
+                        guestToken
+                      )
+                    : () => api.post<{ success: boolean; feedbackId: string }>(
+                        `/api/reports/${report.id}/feedback`,
+                        { feedbackType: "STILL_HAPPENING" }
+                      );
+                  void run(action, "Your feedback was recorded. The report will be reviewed again.");
+                }}
+              >Still happening</button>
+              <button
+                className="button"
+                disabled={busy}
+                onClick={() => {
+                  const action = publicTracking && guestToken
+                    ? () => api.postWithGuestAccess<{ success: boolean; feedbackId: string }>(
+                        `/api/reports/${report.id}/feedback`,
+                        { feedbackType: "DONT_KNOW" },
+                        guestToken
+                      )
+                    : () => api.post<{ success: boolean; feedbackId: string }>(
+                        `/api/reports/${report.id}/feedback`,
+                        { feedbackType: "DONT_KNOW" }
+                      );
+                  void run(action, "Your feedback was recorded.");
+                }}
+              >Don't know</button>
+              <button
+                className="button primary"
+                disabled={busy}
+                onClick={() => {
+                  const action = publicTracking && guestToken
+                    ? () => api.postWithGuestAccess<{ success: boolean; feedbackId: string }>(
+                        `/api/reports/${report.id}/feedback`,
+                        { feedbackType: "FIXED" },
+                        guestToken
+                      )
+                    : () => api.post<{ success: boolean; feedbackId: string }>(
+                        `/api/reports/${report.id}/feedback`,
+                        { feedbackType: "FIXED" }
+                      );
+                  void run(action, "Thank you for confirming the issue is fixed!");
+                }}
+              >It's fixed</button>
+            </div>
           </div>
         )}
 

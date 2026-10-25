@@ -12,6 +12,7 @@ import type { Category, PhotoAnalysisResult, Report } from "../../shared/contrac
 
 type Draft = {
   categoryId: string;
+  municipalityId: string;
   title: string;
   description: string;
   location: string;
@@ -30,7 +31,7 @@ type LocationLookupInfo = {
   policyUrl?: string;
   usageNote?: string;
 };
-const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "", latitude: null, longitude: null };
+const emptyDraft: Draft = { categoryId: "", municipalityId: "", title: "", description: "", location: "", latitude: null, longitude: null };
 
 function readDraft(key: string): Draft {
   try {
@@ -82,6 +83,8 @@ export function ReportCreatePage() {
   const categories = data?.categories ?? [];
   const { data: routingReadiness } = useFetch<RoutingReadiness>("/api/routing/readiness");
   const { data: locationLookupInfo } = useFetch<LocationLookupInfo>("/api/location/attribution");
+  const { data: municipalitiesData } = useFetch<{ municipalities: Array<{ id: string; name: string }> }>("/api/municipalities");
+  const municipalities = municipalitiesData?.municipalities ?? [];
   const { pending, error, fieldErrors, run } = useAction();
 
   function handlePhotoChange(file: File | null) {
@@ -237,6 +240,7 @@ export function ReportCreatePage() {
     await run(async () => {
       const payload = new FormData();
       payload.set("categoryId", form.categoryId);
+      if (form.municipalityId) payload.set("municipalityId", form.municipalityId);
       payload.set("title", form.title);
       payload.set("description", form.description);
       payload.set("location", form.location);
@@ -457,6 +461,26 @@ export function ReportCreatePage() {
               <p className="muted" role="status">
                 AI selected {chosenCategory.name}; this report will go to {chosenCategory.organizationName}.
               </p>
+            )}
+
+            {municipalities.length > 0 && (
+              <Field
+                label="Municipality"
+                hint="Select the municipality where this issue is located. This helps route your report to the correct local authority."
+              >
+                <select
+                  className="select"
+                  value={form.municipalityId}
+                  onChange={(event) => setForm({ ...form, municipalityId: event.target.value })}
+                >
+                  <option value="">Select municipality (optional)</option>
+                  {municipalities.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             )}
 
             <Field

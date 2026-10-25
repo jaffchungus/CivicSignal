@@ -159,6 +159,8 @@ export type Report = {
     organizationName?: string;
     municipalityName?: string;
   } | null;
+  municipalityId?: string | null;
+  municipalityName?: string | null;
 };
 
 export type PhotoAnalysisResult = {
@@ -217,4 +219,29 @@ export type AuditEntry = {
 
 export type AdminUser = PublicUser & {
   createdAt?: string;
+};
+
+export type Municipality = {
+  id: string;
+  name: string;
+  boundaryGeojson?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ReportSimilarity = {
+  id: string;
+  primaryReportId: string;
+  similarReportId: string;
+  similarityScore: number;
+  matchedByAi: boolean;
+  createdAt: string;
+};
+
+export type ResidentFeedback = {
+  id: string;
+  reportId: string;
+  userId?: string | null;
+  feedbackType: "STILL_HAPPENING" | "DONT_KNOW" | "FIXED";
+  createdAt: string;
 };

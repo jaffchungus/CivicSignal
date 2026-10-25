@@ -15,14 +15,27 @@ const POSTGRES_SCHEMA = `
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS municipalities (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      boundary_geojson TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS municipalities_name_idx ON municipalities(name);
+
     CREATE TABLE IF NOT EXISTS organizations (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('PUBLIC_SERVICE', 'LAW_ENFORCEMENT')),
       active SMALLINT NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS organizations_municipality_idx ON organizations(municipality_id);
 
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -33,11 +46,14 @@ const POSTGRES_SCHEMA = `
       role TEXT NOT NULL CHECK (role IN ('RESIDENT', 'OFFICIAL', 'LAW_ENFORCEMENT', 'ADMIN')),
       status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'PENDING', 'SUSPENDED')),
       organization_id TEXT REFERENCES organizations(id) ON DELETE RESTRICT,
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
       verified_at BIGINT,
       verified_by_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS users_municipality_idx ON users(municipality_id);
 
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
@@ -75,6 +91,7 @@ const POSTGRES_SCHEMA = `
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
       reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
       status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
       moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
       created_at BIGINT NOT NULL,
@@ -177,6 +194,29 @@ const POSTGRES_SCHEMA = `
 
     CREATE INDEX IF NOT EXISTS audit_events_created_at_idx
       ON audit_events(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS report_similarity (
+      id TEXT PRIMARY KEY,
+      primary_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      similar_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      similarity_score DOUBLE PRECISION NOT NULL,
+      matched_by_ai SMALLINT NOT NULL DEFAULT 0 CHECK (matched_by_ai IN (0, 1)),
+      created_at BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS report_similarity_primary_idx ON report_similarity(primary_report_id, similarity_score DESC);
+    CREATE INDEX IF NOT EXISTS report_similarity_similar_idx ON report_similarity(similar_report_id);
+
+    CREATE TABLE IF NOT EXISTS resident_feedback (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      feedback_type TEXT NOT NULL CHECK (feedback_type IN ('STILL_HAPPENING', 'DONT_KNOW', 'FIXED')),
+      created_at BIGINT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS resident_feedback_report_idx ON resident_feedback(report_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS resident_feedback_user_idx ON resident_feedback(user_id);
   `;
 
 /**
@@ -217,8 +257,9 @@ const DATA_API_PROTECTION = `
   DECLARE table_name text; role_name text;
   BEGIN
     FOREACH table_name IN ARRAY ARRAY[
-      'settings', 'organizations', 'users', 'sessions', 'categories', 'reports',
-      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'report_photos', 'notifications', 'push_subscriptions', 'audit_events'
+      'settings', 'municipalities', 'organizations', 'users', 'sessions', 'categories', 'reports',
+      'guest_report_access', 'report_events', 'report_updates', 'attachments', 'report_photos', 'notifications', 'push_subscriptions', 'audit_events',
+      'report_similarity', 'resident_feedback'
     ] LOOP
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
       EXECUTE format('REVOKE ALL ON TABLE %I FROM PUBLIC', table_name);
@@ -254,6 +295,12 @@ export async function createPostgresDatabase(connectionString: string): Promise<
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION");
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS accuracy_meters DOUBLE PRECISION");
     await initializationClient.query("ALTER TABLE reports ALTER COLUMN reporter_user_id DROP NOT NULL");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+    await initializationClient.query("CREATE INDEX IF NOT EXISTS reports_municipality_idx ON reports(municipality_id)");
+    await initializationClient.query("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+    await initializationClient.query("CREATE INDEX IF NOT EXISTS organizations_municipality_idx ON organizations(municipality_id)");
+    await initializationClient.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+    await initializationClient.query("CREATE INDEX IF NOT EXISTS users_municipality_idx ON users(municipality_id)");
     await initializationClient.query(DATA_API_PROTECTION);
     await initializationClient.query("COMMIT");
   } catch (error) {

@@ -15,14 +15,27 @@ const SQLITE_SCHEMA = `
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS municipalities (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      boundary_geojson TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS municipalities_name_idx ON municipalities(name);
+
     CREATE TABLE IF NOT EXISTS organizations (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('PUBLIC_SERVICE', 'LAW_ENFORCEMENT')),
       active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS organizations_municipality_idx ON organizations(municipality_id);
 
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -33,11 +46,14 @@ const SQLITE_SCHEMA = `
       role TEXT NOT NULL CHECK (role IN ('RESIDENT', 'OFFICIAL', 'LAW_ENFORCEMENT', 'ADMIN')),
       status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'PENDING', 'SUSPENDED')),
       organization_id TEXT REFERENCES organizations(id) ON DELETE RESTRICT,
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
       verified_at INTEGER,
       verified_by_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS users_municipality_idx ON users(municipality_id);
 
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
@@ -75,6 +91,7 @@ const SQLITE_SCHEMA = `
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
       reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
       status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
       moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
       created_at INTEGER NOT NULL,
@@ -177,6 +194,29 @@ const SQLITE_SCHEMA = `
 
     CREATE INDEX IF NOT EXISTS audit_events_created_at_idx
       ON audit_events(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS report_similarity (
+      id TEXT PRIMARY KEY,
+      primary_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      similar_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      similarity_score REAL NOT NULL,
+      matched_by_ai SMALLINT NOT NULL DEFAULT 0 CHECK (matched_by_ai IN (0, 1)),
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS report_similarity_primary_idx ON report_similarity(primary_report_id, similarity_score DESC);
+    CREATE INDEX IF NOT EXISTS report_similarity_similar_idx ON report_similarity(similar_report_id);
+
+    CREATE TABLE IF NOT EXISTS resident_feedback (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      feedback_type TEXT NOT NULL CHECK (feedback_type IN ('STILL_HAPPENING', 'DONT_KNOW', 'FIXED')),
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS resident_feedback_report_idx ON resident_feedback(report_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS resident_feedback_user_idx ON resident_feedback(user_id);
   `;
 
 class Mutex {
@@ -263,6 +303,69 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
         COMMIT;
       `);
       database.pragma("foreign_keys = ON");
+    }
+
+    // Add municipality support tables if they don't exist
+    const tables = database.pragma("table_info") as Array<{ name: string }>;
+    if (!tables.some((t) => t.name === "municipalities")) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS municipalities (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          boundary_geojson TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS municipalities_name_idx ON municipalities(name);
+      `);
+    }
+
+    const orgColumns = database.pragma("table_info(organizations)") as Array<{ name: string }>;
+    if (!orgColumns.some((c) => c.name === "municipality_id")) {
+      database.exec("ALTER TABLE organizations ADD COLUMN municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+      database.exec("CREATE INDEX IF NOT EXISTS organizations_municipality_idx ON organizations(municipality_id)");
+    }
+
+    const userColumns = database.pragma("table_info(users)") as Array<{ name: string }>;
+    if (!userColumns.some((c) => c.name === "municipality_id")) {
+      database.exec("ALTER TABLE users ADD COLUMN municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+      database.exec("CREATE INDEX IF NOT EXISTS users_municipality_idx ON users(municipality_id)");
+    }
+
+    const reportColumns = database.pragma("table_info(reports)") as Array<{ name: string }>;
+    if (!reportColumns.some((c) => c.name === "municipality_id")) {
+      database.exec("ALTER TABLE reports ADD COLUMN municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+      database.exec("CREATE INDEX IF NOT EXISTS reports_municipality_idx ON reports(municipality_id)");
+    }
+
+    // Add similarity and feedback tables if they don't exist
+    if (!tables.some((t) => t.name === "report_similarity")) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS report_similarity (
+          id TEXT PRIMARY KEY,
+          primary_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+          similar_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+          similarity_score REAL NOT NULL,
+          matched_by_ai INTEGER NOT NULL DEFAULT 0 CHECK (matched_by_ai IN (0, 1)),
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS report_similarity_primary_idx ON report_similarity(primary_report_id, similarity_score DESC);
+        CREATE INDEX IF NOT EXISTS report_similarity_similar_idx ON report_similarity(similar_report_id);
+      `);
+    }
+
+    if (!tables.some((t) => t.name === "resident_feedback")) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS resident_feedback (
+          id TEXT PRIMARY KEY,
+          report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+          user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          feedback_type TEXT NOT NULL CHECK (feedback_type IN ('STILL_HAPPENING', 'DONT_KNOW', 'FIXED')),
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS resident_feedback_report_idx ON resident_feedback(report_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS resident_feedback_user_idx ON resident_feedback(user_id);
+      `);
     }
   } catch (error) {
     database.close();

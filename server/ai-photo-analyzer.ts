@@ -1,6 +1,13 @@
 import type { PhotoAnalysisResult } from "../shared/contracts.js";
 import { ApiError } from "./http.js";
 
+export interface SimilarityResult {
+  similarReportId: string;
+  similarityScore: number;
+  matchedByAi: boolean;
+  reason: string;
+}
+
 const GEMINI_MODEL = "gemini-3-flash-preview";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -252,4 +259,143 @@ function invalidProviderResponse(): ApiError {
     "AI_INVALID_RESPONSE",
     "The photo classification service returned an unusable result. Please try again later.",
   );
+}
+
+/**
+ * Detect similar reports based on image similarity using AI.
+ * Compares the new image with existing reports at similar locations.
+ */
+export async function detectSimilarReports(
+  imageBuffer: Buffer,
+  mimeType: string,
+  existingReports: Array<{
+    id: string;
+    title: string;
+    category: string;
+    location: string;
+    latitude: number | null;
+    longitude: number | null;
+  }>,
+  locationBufferMeters: number = 100, // 100 meters for location proximity
+): Promise<SimilarityResult[]> {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey || !isPhotoAnalysisConfigured()) {
+    return [];
+  }
+
+  // Filter reports by location proximity if coordinates are available
+  const nearbyReports = existingReports.filter((report) => {
+    if (!report.latitude || !report.longitude) return false;
+    // For now, return all reports if no filtering logic is implemented
+    // TODO: Implement actual distance calculation
+    return true;
+  });
+
+  if (nearbyReports.length === 0) {
+    return [];
+  }
+
+  // Prepare comparison prompt for Gemini
+  const reportSummaries = nearbyReports.map((r) =>
+    `ID: ${r.id}, Title: ${r.title}, Category: ${r.category}, Location: ${r.location}`
+  ).join("\n");
+
+  const prompt = `You are comparing a new civic issue photo with existing reports to detect if they show the same persistent problem.
+
+Existing reports in the area:
+${reportSummaries}
+
+Analyze the new photo and determine if it shows the same issue as any existing report. Consider:
+- The type of problem (pothole, broken streetlight, graffiti, etc.)
+- Visual similarity of the damage or issue
+- Whether it appears to be the same location
+
+Return only a JSON object with this shape:
+{
+  "similarReports": [
+    {
+      "reportId": "the exact report id from the list above, or empty string if no match",
+      "similarityScore": 0.0 to 1.0 (how similar the images appear, 1.0 = identical issue),
+      "reason": "brief explanation of why they are similar or different"
+    }
+  ]
+}`;
+
+  const responseSchema = {
+    type: "OBJECT",
+    properties: {
+      similarReports: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            reportId: { type: "STRING" },
+            similarityScore: { type: "NUMBER" },
+            reason: { type: "STRING" },
+          },
+          required: ["reportId", "similarityScore", "reason"],
+        },
+      },
+    },
+    required: ["similarReports"],
+  };
+
+  try {
+    const response = await fetch(GEMINI_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: imageBuffer.toString("base64"),
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema,
+          thinkingConfig: { thinkingLevel: "minimal" },
+          maxOutputTokens: 1024,
+        },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+      console.error("[similarity-detection] Gemini request failed", response.status);
+      return [];
+    }
+
+    const data = await response.json() as GeminiResponse;
+    const text = data.candidates?.[0]?.content?.parts
+      ?.find((part) => part.thought !== true && typeof part.text === "string")?.text;
+
+    if (!text) return [];
+
+    const parsed = JSON.parse(text) as { similarReports?: Array<{ reportId: string; similarityScore: number; reason: string }> };
+
+    if (!Array.isArray(parsed.similarReports)) return [];
+
+    return parsed.similarReports
+      .filter((result) => result.reportId && result.similarityScore > 0.5) // Only return high-confidence matches
+      .map((result) => ({
+        similarReportId: result.reportId,
+        similarityScore: Math.min(Math.max(result.similarityScore, 0), 1),
+        matchedByAi: true,
+        reason: result.reason || "AI detected visual similarity",
+      }));
+  } catch (error) {
+    console.error("[similarity-detection] Error:", error);
+    return [];
+  }
 }
