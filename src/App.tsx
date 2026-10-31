@@ -8,6 +8,7 @@ import { AboutPage } from "./pages/AboutPage";
 import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
 import { LandingPage } from "./pages/LandingPage";
+import { MapPage } from "./pages/MapPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { ReportCreatePage } from "./pages/ReportCreatePage";
@@ -113,6 +114,14 @@ export default function App() {
         <Route
           path="/reports/new"
           element={<ReportCreatePage />}
+        />
+        <Route
+          path="/map"
+          element={
+            <Protected>
+              <MapPage />
+            </Protected>
+          }
         />
         <Route path="/track/:reportId" element={<ReportDetailPage publicTracking />} />
         <Route

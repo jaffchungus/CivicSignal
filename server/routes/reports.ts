@@ -27,7 +27,14 @@ import {
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
 import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
+import { findNearestStaff } from "../municipality-fallback.js";
 import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
+import {
+  findSimilarReports,
+  generateImageEmbedding,
+  serializeEmbedding,
+  detectPersistentProblem,
+} from "../image-similarity.js";
 import { sendWebPushToUser } from "../web-push.js";
 import type { PhotoStore } from "../photo-store.js";
 import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
@@ -101,11 +108,15 @@ type ReportRow = {
   organization_id: string;
   organization_name: string;
   organization_kind: OrganizationKind;
+  municipality_id: string | null;
+  municipality_name: string | null;
   reporter_user_id: string | null;
   reporter_display_name: string | null;
   assigned_user_id: string | null;
   assigned_display_name: string | null;
   assigned_role: UserRole | null;
+  reporter_confirmation: string | null;
+  reporter_confirmed_at: number | null;
 };
 
 const REPORT_SELECT = `
@@ -117,12 +128,15 @@ const REPORT_SELECT = `
          categories.description AS category_description,
          organizations.id AS organization_id, organizations.name AS organization_name,
          organizations.kind AS organization_kind,
+         municipalities.id AS municipality_id, municipalities.name AS municipality_name,
          reporter.id AS reporter_user_id, reporter.display_name AS reporter_display_name,
          assignee.id AS assigned_user_id, assignee.display_name AS assigned_display_name,
-         assignee.role AS assigned_role
+         assignee.role AS assigned_role,
+         reports.reporter_confirmation, reports.reporter_confirmed_at
   FROM reports
   JOIN categories ON categories.id = reports.category_id
   JOIN organizations ON organizations.id = reports.organization_id
+  LEFT JOIN municipalities ON municipalities.id = reports.municipality_id
   LEFT JOIN users AS reporter ON reporter.id = reports.reporter_user_id
   LEFT JOIN users AS assignee ON assignee.id = reports.assigned_user_id`;
 
@@ -133,6 +147,7 @@ const coordinateSchema = z.preprocess(
 
 const createReportSchema = z.object({
   categoryId: z.string().trim().min(1),
+  municipalityId: z.string().trim().optional(),
   title: z.string().trim().max(140).optional().default(""),
   description: z.string().trim().max(4000).optional().default(""),
   location: z.string().trim().max(300).optional().default(""),
@@ -264,6 +279,12 @@ function serializeSummary(row: ReportRow) {
       name: row.organization_name,
       kind: row.organization_kind,
     },
+    municipality: row.municipality_id
+      ? {
+          id: row.municipality_id,
+          name: row.municipality_name ?? "Unknown Municipality",
+        }
+      : null,
     reporter: row.reporter_user_id
       ? { id: row.reporter_user_id, displayName: row.reporter_display_name ?? "Resident" }
       : { id: null, displayName: "Guest resident" },
@@ -276,6 +297,8 @@ function serializeSummary(row: ReportRow) {
       : null,
     submittedAt: isoTime(row.created_at),
     updatedAt: isoTime(row.updated_at),
+    reporterConfirmation: row.reporter_confirmation as "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null,
+    reporterConfirmedAt: row.reporter_confirmed_at ? isoTime(row.reporter_confirmed_at) : null,
   };
 }
 
@@ -515,6 +538,22 @@ export function createReportsRouter(deps: {
       );
     }
 
+    // Validate municipality if provided
+    let municipalityId = input.municipalityId ?? null;
+    if (municipalityId) {
+      const municipality = (await database
+        .prepare("SELECT id, name FROM municipalities WHERE id = ? AND active = 1")
+        .get(municipalityId)) as { id: string; name: string } | undefined;
+      if (!municipality) {
+        throw new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          "The request contains invalid fields.",
+          { municipalityId: ["The selected municipality is not valid."] },
+        );
+      }
+    }
+
     const title = input.title || `${category.name} issue`;
     const description = input.description;
     const location = input.location || "Precise GPS pin attached";
@@ -542,6 +581,19 @@ export function createReportsRouter(deps: {
     }
     const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
 
+    // Generate image embedding for similarity detection
+    const imageEmbedding = await generateImageEmbedding(file.buffer);
+
+    // Find similar reports
+    const similarReport = await findSimilarReports(
+      database,
+      reportId,
+      latitude,
+      longitude,
+      category.id,
+      imageEmbedding,
+    );
+
     let referenceCode = "";
     let pushRecipients: string[] = [];
     await database.transaction(async () => {
@@ -550,9 +602,9 @@ export function createReportsRouter(deps: {
         .prepare(
           `INSERT INTO reports
             (id, reference_code, title, description, location, latitude, longitude, accuracy_meters, category_id,
-             organization_id, reporter_user_id, assigned_user_id, status,
-             moderation_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?)`,
+             organization_id, municipality_id, reporter_user_id, assigned_user_id, status,
+             moderation_status, image_embedding, similar_report_id, similarity_score, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?)`,
         )
         .run(
           reportId,
@@ -565,7 +617,11 @@ export function createReportsRouter(deps: {
           accuracyMeters,
           category.id,
           category.organization_id,
+          municipalityId,
           reporterUserId,
+          serializeEmbedding(imageEmbedding),
+          similarReport?.similarReportId ?? null,
+          similarReport?.similarityScore ?? null,
           now,
           now,
         );
@@ -611,6 +667,69 @@ export function createReportsRouter(deps: {
         title: `New report: ${title}`,
         message: `${referenceCode} was submitted to ${category.name} and needs review.`,
       }, true);
+
+      // Check if there are staff in the selected municipality, if not find nearest
+      if (municipalityId) {
+        const municipalityStaff = (await database
+          .prepare(
+            `SELECT users.id
+             FROM users
+             JOIN organizations ON organizations.id = users.organization_id
+             WHERE organizations.municipality_id = ?
+               AND users.status = 'ACTIVE'
+               AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+             LIMIT 1`,
+          )
+          .get(municipalityId)) as { id: string } | undefined;
+
+        if (!municipalityStaff) {
+          // No staff in this municipality, find nearest staff
+          const coordinates = latitude !== null && longitude !== null
+            ? { latitude, longitude }
+            : null;
+          const nearestStaff = await findNearestStaff(database, coordinates, municipalityId);
+
+          if (nearestStaff) {
+            // Assign to nearest staff or create a notification
+            await createNotification(database, {
+              userId: nearestStaff.id,
+              reportId,
+              type: "MUNICIPALITY_FALLBACK",
+              title: `Nearest officer assignment: ${referenceCode}`,
+              message: `This report from municipality with no available staff has been routed to you as the nearest officer (${nearestStaff.distanceKm === Infinity ? 'no location data' : `${nearestStaff.distanceKm.toFixed(1)} km away`}).`,
+            }, true);
+            pushRecipients.push(nearestStaff.id);
+          }
+        }
+      }
+
+      // Check if this is a persistent problem and notify appropriate staff
+      if (similarReport) {
+        const persistenceCheck = await detectPersistentProblem(database, reportId);
+        if (persistenceCheck.isPersistent) {
+          // Notify the staff who handled the original similar report
+          const originalReport = (await database
+            .prepare(
+              `SELECT assigned_user_id, reporter_user_id
+               FROM reports
+               WHERE id = ?`,
+            )
+            .get(similarReport.similarReportId)) as
+            | { assigned_user_id: string | null; reporter_user_id: string | null }
+            | undefined;
+
+          if (originalReport?.assigned_user_id) {
+            await createNotification(database, {
+              userId: originalReport.assigned_user_id,
+              reportId,
+              type: "PERSISTENT_PROBLEM",
+              title: `Persistent problem detected: ${referenceCode}`,
+              message: `This report appears to be a repeat of a similar issue you previously handled. ${persistenceCheck.relatedReportCount} related reports have been submitted for this location and category.`,
+            }, true);
+            pushRecipients.push(originalReport.assigned_user_id);
+          }
+        }
+      }
     }, async () => {
       if (storedPhoto) {
         try {
@@ -654,8 +773,8 @@ export function createReportsRouter(deps: {
       : row.status;
     const now = Date.now();
     await database
-      .prepare("UPDATE reports SET status = ?, updated_at = ? WHERE id = ?")
-      .run(nextStatus, now, row.id);
+      .prepare("UPDATE reports SET status = ?, reporter_confirmation = 'STILL_HAPPENING', reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
+      .run(nextStatus, now, now, row.id);
     await recordReportEvent(database, {
       reportId: row.id,
       actorUserId,
@@ -673,11 +792,107 @@ export function createReportsRouter(deps: {
       targetId: row.id,
       details: { referenceCode: row.reference_code, fromStatus: row.status, toStatus: nextStatus },
     });
+
+    // If the report was resolved/closed, notify the staff who resolved it
+    if (row.status === "RESOLVED" || row.status === "CLOSED") {
+      let notifyUserId = row.assigned_user_id;
+      if (!notifyUserId) {
+        // Find who resolved it from timeline
+        const resolver = (await database
+          .prepare(
+            `SELECT actor_user_id
+             FROM report_events
+             WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status = 'RESOLVED'
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          )
+          .get(row.id)) as { actor_user_id: string | null } | undefined;
+        notifyUserId = resolver?.actor_user_id ?? null;
+      }
+
+      if (notifyUserId) {
+        await createNotification(database, {
+          userId: notifyUserId,
+          reportId: row.id,
+          type: "REPORT_STILL_HAPPENING",
+          title: `Problem persists: ${row.reference_code}`,
+          message: `A resident reports that "${row.title}" is still happening after being marked as ${row.status.toLowerCase()}. The report has been returned to UNDER_REVIEW.`,
+          metadata: { previousStatus: row.status },
+        });
+      }
+    }
+
     await notifyOrganization(database, row.organization_id, {
       reportId: row.id,
       type: "REPORT_STILL_HAPPENING",
       title: `Resident follow-up: ${row.reference_code}`,
       message: `A resident says “${row.title}” is still happening. Please review the report.`,
+    });
+    const refreshed = await loadReport(database, row.id);
+    return serializeDetail(database, refreshed, {
+      id: actorUserId ?? "",
+      role: "RESIDENT",
+      organizationId: null,
+    });
+  }
+
+  async function recordConfirmation(row: ReportRow, confirmation: "FIXED" | "DONT_KNOW", actorUserId: string | null) {
+    const now = Date.now();
+    await database
+      .prepare("UPDATE reports SET reporter_confirmation = ?, reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
+      .run(confirmation, now, now, row.id);
+    await recordReportEvent(database, {
+      reportId: row.id,
+      actorUserId,
+      action: "REPORTER_CONFIRMATION",
+      message: confirmation === "FIXED"
+        ? "A resident confirmed this issue has been fixed."
+        : "A resident is unsure about the current status of this issue.",
+    });
+    await recordAudit(database, {
+      actorUserId,
+      action: "REPORTER_CONFIRMATION",
+      targetType: "REPORT",
+      targetId: row.id,
+      details: { referenceCode: row.reference_code, confirmation },
+    });
+
+    // Notify the staff who handled this report
+    let notifyUserId = row.assigned_user_id;
+    if (!notifyUserId && row.status === "RESOLVED") {
+      // If no assigned user but resolved, try to find who resolved it from timeline
+      const resolver = (await database
+        .prepare(
+          `SELECT actor_user_id
+           FROM report_events
+           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status = 'RESOLVED'
+           ORDER BY created_at DESC
+           LIMIT 1`,
+        )
+        .get(row.id)) as { actor_user_id: string | null } | undefined;
+      notifyUserId = resolver?.actor_user_id ?? null;
+    }
+
+    if (notifyUserId) {
+      await createNotification(database, {
+        userId: notifyUserId,
+        reportId: row.id,
+        type: "REPORTER_CONFIRMATION",
+        title: `Resident confirmation: ${row.reference_code}`,
+        message: confirmation === "FIXED"
+          ? `A resident confirmed "${row.title}" has been fixed.`
+          : `A resident is unsure about the status of "${row.title}".`,
+        metadata: { confirmation },
+      });
+    }
+
+    await notifyOrganization(database, row.organization_id, {
+      reportId: row.id,
+      type: "REPORTER_CONFIRMATION",
+      title: `Resident confirmation: ${row.reference_code}`,
+      message: confirmation === "FIXED"
+        ? `A resident confirmed "${row.title}" has been fixed.`
+        : `A resident is unsure about the status of "${row.title}".`,
     });
     const refreshed = await loadReport(database, row.id);
     return serializeDetail(database, refreshed, {
@@ -909,6 +1124,26 @@ export function createReportsRouter(deps: {
     response.json(await recordStillHappening(row, null));
   });
 
+  router.post("/:reportId/guest/confirm-fixed", residentConfirmationLimiter, async (request, response) => {
+    const reportId = pathId(request, "reportId");
+    await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
+    const row = await loadReport(database, reportId);
+    if (row.reporter_user_id !== null) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await recordConfirmation(row, "FIXED", null));
+  });
+
+  router.post("/:reportId/guest/confirm-unknown", residentConfirmationLimiter, async (request, response) => {
+    const reportId = pathId(request, "reportId");
+    await assertGuestAccess(reportId, request.get("X-Guest-Access") ?? "");
+    const row = await loadReport(database, reportId);
+    if (row.reporter_user_id !== null) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await recordConfirmation(row, "DONT_KNOW", null));
+  });
+
   router.get("/:reportId/guest/attachments/:attachmentId", async (request, response) => {
     const reportId = pathId(request, "reportId");
     const attachmentId = pathId(request, "attachmentId");
@@ -944,6 +1179,24 @@ export function createReportsRouter(deps: {
       throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
     }
     response.json(await recordStillHappening(row, user.id));
+  });
+
+  router.post("/:reportId/confirm-fixed", authenticate(database), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
+    const user = currentUser(request);
+    const row = await loadReport(database, pathId(request, "reportId"));
+    if (row.reporter_user_id !== user.id) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await recordConfirmation(row, "FIXED", user.id));
+  });
+
+  router.post("/:reportId/confirm-unknown", authenticate(database), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
+    const user = currentUser(request);
+    const row = await loadReport(database, pathId(request, "reportId"));
+    if (row.reporter_user_id !== user.id) {
+      throw new ApiError(404, "REPORT_NOT_FOUND", "This report does not exist.");
+    }
+    response.json(await recordConfirmation(row, "DONT_KNOW", user.id));
   });
 
   router.get(

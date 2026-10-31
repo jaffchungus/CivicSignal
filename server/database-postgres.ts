@@ -19,6 +19,18 @@ const POSTGRES_SCHEMA = `
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('PUBLIC_SERVICE', 'LAW_ENFORCEMENT')),
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
+      active SMALLINT NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS municipalities (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      boundary_geojson TEXT,
+      center_latitude DOUBLE PRECISION,
+      center_longitude DOUBLE PRECISION,
       active SMALLINT NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
@@ -73,10 +85,16 @@ const POSTGRES_SCHEMA = `
       accuracy_meters DOUBLE PRECISION,
       category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+      municipality_id TEXT,
       reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
       moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
+      reporter_confirmation TEXT CHECK (reporter_confirmation IN ('STILL_HAPPENING', 'FIXED', 'DONT_KNOW')),
+      reporter_confirmed_at BIGINT,
+      image_embedding BYTEA,
+      similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+      similarity_score DOUBLE PRECISION,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     );
@@ -217,7 +235,7 @@ const DATA_API_PROTECTION = `
   DECLARE table_name text; role_name text;
   BEGIN
     FOREACH table_name IN ARRAY ARRAY[
-      'settings', 'organizations', 'users', 'sessions', 'categories', 'reports',
+      'settings', 'organizations', 'municipalities', 'users', 'sessions', 'categories', 'reports',
       'guest_report_access', 'report_events', 'report_updates', 'attachments', 'report_photos', 'notifications', 'push_subscriptions', 'audit_events'
     ] LOOP
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
@@ -253,6 +271,13 @@ export async function createPostgresDatabase(connectionString: string): Promise<
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION");
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION");
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS accuracy_meters DOUBLE PRECISION");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS municipality_id TEXT");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS reporter_confirmation TEXT CHECK (reporter_confirmation IN ('STILL_HAPPENING', 'FIXED', 'DONT_KNOW'))");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS reporter_confirmed_at BIGINT");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS image_embedding BYTEA");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS similarity_score DOUBLE PRECISION");
+    await initializationClient.query("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
     await initializationClient.query("ALTER TABLE reports ALTER COLUMN reporter_user_id DROP NOT NULL");
     await initializationClient.query(DATA_API_PROTECTION);
     await initializationClient.query("COMMIT");

@@ -40,6 +40,7 @@ export function createNotificationsRouter(deps: {
       read: row.read_at !== null,
       createdAt: isoTime(row.created_at),
       reportId: row.report_id,
+      metadata: null, // Can be extended to include metadata from a separate table if needed
     };
   }
 

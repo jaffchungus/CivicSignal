@@ -106,6 +106,14 @@ export type Organization = {
   memberCount?: number;
 };
 
+export type Municipality = {
+  id: string;
+  name: string;
+  centerLatitude?: number | null;
+  centerLongitude?: number | null;
+  active?: boolean;
+};
+
 export type Attachment = {
   id: string;
   filename?: string;
@@ -141,11 +149,14 @@ export type Report = {
   status: ReportStatus;
   category: Category;
   organization?: Organization | null;
+  municipality?: Municipality | null;
   reporter?: { id?: string | null; displayName: string } | null;
   assignedTo?: { id: string; displayName: string; role?: UserRole } | null;
   submittedAt: string;
   updatedAt: string;
   moderationStatus?: string | null;
+  reporterConfirmation?: "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null;
+  reporterConfirmedAt?: string | null;
   attachments?: Attachment[];
   updates?: ReportUpdate[];
   timeline?: ReportTimelineEntry[];
@@ -179,6 +190,11 @@ export type Notification = {
   read: boolean;
   createdAt: string;
   reportId?: string | null;
+  metadata?: {
+    relatedReportCount?: number;
+    similarityScore?: number;
+    distanceMeters?: number;
+  } | null;
 };
 
 export type SetupStatus = {

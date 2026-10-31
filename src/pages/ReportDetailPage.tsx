@@ -245,22 +245,59 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
           </div>
         )}
 
-        {(publicTracking || report.reporter?.id === user?.id) &&
-          ["IN_PROGRESS", "RESOLVED", "CLOSED"].includes(report.status) &&
-          !report.timeline?.some((event) => event.action === "REPORT_STILL_HAPPENING") && (
+        {(publicTracking || report.reporter?.id === user?.id) && (
           <div className="resident-follow-up">
-            <h2>Is this still happening?</h2>
+            <h2>Current status confirmation</h2>
             <p className="muted">Your confirmation is recorded for staff to review. It does not reveal your location to other residents.</p>
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() => {
-                const action = publicTracking && guestToken
-                  ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
-                  : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
-                void run(action, "Your follow-up was recorded for the responsible organization.");
-              }}
-            >Still happening</button>
+            {report.reporterConfirmation ? (
+              <div className="confirmation-display">
+                <p><strong>You reported:</strong> {report.reporterConfirmation === "STILL_HAPPENING" ? "Still happening" : report.reporterConfirmation === "FIXED" ? "Fixed" : "Don't know"}</p>
+                {report.reporterConfirmedAt && <p className="muted">Confirmed on {formatDateTime(report.reporterConfirmedAt)}</p>}
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const action = publicTracking && guestToken
+                      ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
+                      : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
+                    void run(action, "Your follow-up was recorded for the responsible organization.");
+                  }}
+                >Update confirmation</button>
+              </div>
+            ) : (
+              <div className="confirmation-buttons">
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const action = publicTracking && guestToken
+                      ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
+                      : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
+                    void run(action, "Your confirmation was recorded for the responsible organization.");
+                  }}
+                >Still happening</button>
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const action = publicTracking && guestToken
+                      ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-fixed`, guestToken)
+                      : () => api.post<Report>(`/api/reports/${report.id}/confirm-fixed`);
+                    void run(action, "Your confirmation was recorded for the responsible organization.");
+                  }}
+                >Fixed</button>
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const action = publicTracking && guestToken
+                      ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-unknown`, guestToken)
+                      : () => api.post<Report>(`/api/reports/${report.id}/confirm-unknown`);
+                    void run(action, "Your confirmation was recorded for the responsible organization.");
+                  }}
+                >Don't know</button>
+              </div>
+            )}
           </div>
         )}
 

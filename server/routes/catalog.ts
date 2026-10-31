@@ -33,6 +33,18 @@ export function createCatalogRouter(deps: { database: CivicDatabase; photoStorag
     response.json({ categories });
   });
 
+  router.get("/municipalities", async (_request, response) => {
+    const municipalities = await database
+      .prepare(
+        `SELECT id, name, center_latitude AS "centerLatitude", center_longitude AS "centerLongitude", active
+         FROM municipalities
+         WHERE active = 1
+         ORDER BY name`,
+      )
+      .all();
+    response.json({ municipalities });
+  });
+
   router.get("/routing/readiness", async (_request, response) => {
     const { count: activeCategories } = (await database
       .prepare(`SELECT COUNT(*) AS count FROM categories

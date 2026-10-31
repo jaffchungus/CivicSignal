@@ -69,6 +69,7 @@ export function Layout() {
               <NavLink to="/" end>
                 {homeLabel}
               </NavLink>
+              <NavLink to="/map">Map</NavLink>
               <NavLink to="/notifications">
                 Notifications
                 {unreadCount > 0 && (

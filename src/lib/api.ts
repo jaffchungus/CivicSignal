@@ -84,6 +84,12 @@ export const api = {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   },
+  postGuestConfirm<T>(path: string, token: string): Promise<T> {
+    return request<T>(path, {
+      method: "POST",
+      headers: { "X-Guest-Access": token },
+    });
+  },
   getGuestPhoto(path: string, token: string): Promise<Blob> {
     return fetch(path, {
       credentials: "same-origin",

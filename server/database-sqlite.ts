@@ -19,6 +19,18 @@ const SQLITE_SCHEMA = `
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('PUBLIC_SERVICE', 'LAW_ENFORCEMENT')),
+      municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL,
+      active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS municipalities (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      boundary_geojson TEXT,
+      center_latitude REAL,
+      center_longitude REAL,
       active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -73,10 +85,16 @@ const SQLITE_SCHEMA = `
       accuracy_meters REAL,
       category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
       organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+      municipality_id TEXT,
       reporter_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
       assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'UNDER_REVIEW', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
       moderation_status TEXT NOT NULL DEFAULT 'VISIBLE' CHECK (moderation_status IN ('VISIBLE', 'HIDDEN', 'REMOVED')),
+      reporter_confirmation TEXT CHECK (reporter_confirmation IN ('STILL_HAPPENING', 'FIXED', 'DONT_KNOW')),
+      reporter_confirmed_at INTEGER,
+      image_embedding BLOB,
+      similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+      similarity_score REAL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -220,6 +238,47 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
     }
     if (!reportTableColumns.some((column) => column.name === "accuracy_meters")) {
       database.exec("ALTER TABLE reports ADD COLUMN accuracy_meters REAL");
+    }
+    if (!reportTableColumns.some((column) => column.name === "municipality_id")) {
+      database.exec("ALTER TABLE reports ADD COLUMN municipality_id TEXT");
+    }
+    if (!reportTableColumns.some((column) => column.name === "reporter_confirmation")) {
+      database.exec("ALTER TABLE reports ADD COLUMN reporter_confirmation TEXT CHECK (reporter_confirmation IN ('STILL_HAPPENING', 'FIXED', 'DONT_KNOW'))");
+    }
+    if (!reportTableColumns.some((column) => column.name === "reporter_confirmed_at")) {
+      database.exec("ALTER TABLE reports ADD COLUMN reporter_confirmed_at INTEGER");
+    }
+    if (!reportTableColumns.some((column) => column.name === "image_embedding")) {
+      database.exec("ALTER TABLE reports ADD COLUMN image_embedding BLOB");
+    }
+    if (!reportTableColumns.some((column) => column.name === "similar_report_id")) {
+      database.exec("ALTER TABLE reports ADD COLUMN similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL");
+    }
+    if (!reportTableColumns.some((column) => column.name === "similarity_score")) {
+      database.exec("ALTER TABLE reports ADD COLUMN similarity_score REAL");
+    }
+
+    // Add municipalities table if it doesn't exist
+    const tableList = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='municipalities'").get() as { name: string } | undefined;
+    if (!tableList) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS municipalities (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          boundary_geojson TEXT,
+          center_latitude REAL,
+          center_longitude REAL,
+          active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+    }
+
+    // Add municipality_id to organizations if it doesn't exist
+    const orgColumns = database.pragma("table_info(organizations)") as Array<{ name: string }>;
+    if (!orgColumns.some((column) => column.name === "municipality_id")) {
+      database.exec("ALTER TABLE organizations ADD COLUMN municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
     }
     const reporterColumn = (database.pragma("table_info(reports)") as Array<{
       name: string;

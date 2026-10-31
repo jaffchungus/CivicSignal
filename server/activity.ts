@@ -73,6 +73,7 @@ export async function createNotification(
     title: string;
     message: string;
     deferPush?: boolean;
+    metadata?: Record<string, unknown> | null;
   },
 ): Promise<void> {
   await database
@@ -95,6 +96,7 @@ export async function createNotification(
       title: input.title,
       message: input.message,
       reportId: input.reportId,
+      data: input.metadata,
     });
   }
 }

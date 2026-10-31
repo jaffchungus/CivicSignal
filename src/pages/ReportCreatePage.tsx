@@ -8,10 +8,11 @@ import { useAuth } from "../lib/auth";
 import { clearDraftPhoto, loadDraftPhoto, saveDraftPhoto } from "../lib/report-photo-draft";
 import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
 import { isCoordinateOnlyLocation } from "../../shared/report-location";
-import type { Category, PhotoAnalysisResult, Report } from "../../shared/contracts";
+import type { Category, Municipality, PhotoAnalysisResult, Report } from "../../shared/contracts";
 
 type Draft = {
   categoryId: string;
+  municipalityId: string;
   title: string;
   description: string;
   location: string;
@@ -30,7 +31,7 @@ type LocationLookupInfo = {
   policyUrl?: string;
   usageNote?: string;
 };
-const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "", latitude: null, longitude: null };
+const emptyDraft: Draft = { categoryId: "", municipalityId: "", title: "", description: "", location: "", latitude: null, longitude: null };
 
 function readDraft(key: string): Draft {
   try {
@@ -80,6 +81,8 @@ export function ReportCreatePage() {
   const { data, loading: categoriesLoading, error: categoriesError, reload } =
     useFetch<{ categories: Category[] }>("/api/categories");
   const categories = data?.categories ?? [];
+  const { data: municipalitiesData } = useFetch<{ municipalities: Municipality[] }>("/api/municipalities");
+  const municipalities = municipalitiesData?.municipalities ?? [];
   const { data: routingReadiness } = useFetch<RoutingReadiness>("/api/routing/readiness");
   const { data: locationLookupInfo } = useFetch<LocationLookupInfo>("/api/location/attribution");
   const { pending, error, fieldErrors, run } = useAction();
@@ -237,6 +240,7 @@ export function ReportCreatePage() {
     await run(async () => {
       const payload = new FormData();
       payload.set("categoryId", form.categoryId);
+      if (form.municipalityId) payload.set("municipalityId", form.municipalityId);
       payload.set("title", form.title);
       payload.set("description", form.description);
       payload.set("location", form.location);
@@ -253,14 +257,16 @@ export function ReportCreatePage() {
       );
       removeDraft(draftKey);
       const responsible = result.organization?.name ?? "the configured organization";
+      const municipality = result.municipality?.name ?? "";
+      const locationText = municipality ? `${municipality} / ${responsible}` : responsible;
       if (guest && result.guestAccessToken) {
         const path = `/track/${result.id}#${result.guestAccessToken}`;
         navigate(path, {
-          state: { flash: `Report ${result.referenceCode} was sent to ${responsible}. Save the secure tracking link to return to it.` },
+          state: { flash: `Report ${result.referenceCode} was sent to ${locationText}. Save the secure tracking link to return to it.` },
         });
       } else {
         navigate(`/reports/${result.id}`, {
-          state: { flash: `Report ${result.referenceCode} was sent to ${responsible}. You can follow updates on this page.` },
+          state: { flash: `Report ${result.referenceCode} was sent to ${locationText}. You can follow updates on this page.` },
         });
       }
     });
@@ -458,6 +464,24 @@ export function ReportCreatePage() {
                 AI selected {chosenCategory.name}; this report will go to {chosenCategory.organizationName}.
               </p>
             )}
+
+            <Field
+              label="Municipality"
+              hint="Select the municipality where this issue is located. If no staff are available in this municipality, the report will be automatically routed to the nearest officer."
+            >
+              <select
+                className="select"
+                value={form.municipalityId}
+                onChange={(event) => setForm({ ...form, municipalityId: event.target.value })}
+              >
+                <option value="">Select municipality...</option>
+                {municipalities.map((municipality) => (
+                  <option key={municipality.id} value={municipality.id}>
+                    {municipality.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
 
             <Field
               label="Precise location"
