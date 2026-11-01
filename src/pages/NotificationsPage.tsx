@@ -28,6 +28,9 @@ function pushSetupErrorMessage(error: unknown): string {
       return "The push service rejected this site's application key. Reload the page and try again.";
     }
     if (error.name === "AbortError") {
+      if (/Registration failed - push service error/i.test(error.message)) {
+        return "Your browser's push provider rejected background subscription. Alerts will still appear while CivicSignal is open. If you use Brave, enable Google services for push messaging in Brave settings.";
+      }
       const browserDetail = error.message ? `: ${error.message}` : ".";
       return `The browser or push service aborted subscription setup${browserDetail}`;
     }

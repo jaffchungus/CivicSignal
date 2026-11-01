@@ -34,6 +34,49 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   const active = user?.status === "ACTIVE";
   const store = useFetch<NotificationsResponse>(active ? "/api/notifications" : null);
+  const previousNotifications = useRef<{ userId: string; ids: Set<string> } | null>(null);
+
+  // Poll as a fallback when the browser's background push provider is unavailable.
+  useEffect(() => {
+    if (!active) return;
+    const interval = window.setInterval(() => store.reload(), 20_000);
+    return () => window.clearInterval(interval);
+  }, [active, store.reload]);
+
+  // Turn newly created in-app notifications into foreground system alerts.
+  useEffect(() => {
+    if (!active || !user?.id) {
+      previousNotifications.current = null;
+      return;
+    }
+    const current = store.data?.notifications;
+    if (!current) return;
+
+    const previous = previousNotifications.current;
+    previousNotifications.current = {
+      userId: user.id,
+      ids: new Set(current.map((notification) => notification.id)),
+    };
+    if (!previous || previous.userId !== user.id || !("Notification" in window) || window.Notification.permission !== "granted") return;
+
+    const fresh = current.filter((notification) => !notification.read && !previous.ids.has(notification.id));
+    if (fresh.length === 0 || !("serviceWorker" in navigator)) return;
+
+    void navigator.serviceWorker.ready.then(async (registration) => {
+      for (const notification of fresh.reverse()) {
+        const url = notification.reportId
+          ? `/reports/${encodeURIComponent(notification.reportId)}`
+          : "/notifications";
+        await registration.showNotification(notification.title, {
+          body: notification.message,
+          icon: "/icon-192.png",
+          badge: "/icon-192.png",
+          tag: notification.reportId ? `report-${notification.reportId}` : `notification-${notification.id}`,
+          data: { url },
+        });
+      }
+    }).catch(() => undefined);
+  }, [active, store.data, user?.id]);
 
   // Keep the count fresh as the user moves between pages (mirrors the badge's
   // old refresh-on-navigation behavior). The initial load — and any transition
