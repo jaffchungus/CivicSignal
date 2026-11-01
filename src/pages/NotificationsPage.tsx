@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { BellRing } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api } from "../lib/api";
+import { ApiRequestError, api } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { useNotifications } from "../lib/notifications";
 import { useAction } from "../lib/hooks";
@@ -16,6 +16,24 @@ function decodeApplicationServerKey(value: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;
+}
+
+function pushSetupErrorMessage(error: unknown): string {
+  if (error instanceof ApiRequestError) return error.message;
+  if (error instanceof DOMException) {
+    if (error.name === "NotAllowedError") {
+      return "The browser blocked push setup. Check this site's notification permission and try again.";
+    }
+    if (error.name === "InvalidAccessError") {
+      return "The push service rejected this site's application key. Reload the page and try again.";
+    }
+    if (error.name === "AbortError") {
+      return "The browser could not reach its push service. Check your connection and try again.";
+    }
+  }
+  return error instanceof Error && error.message
+    ? `Push setup failed: ${error.message}`
+    : "Push setup failed for an unknown reason. Try again.";
 }
 
 function PushPreferences() {
@@ -87,8 +105,8 @@ function PushPreferences() {
       setState("enabled");
       setConfig({ ...config, deviceCount: config.deviceCount + 1 });
       setMessage("System alerts are on for this device.");
-    } catch {
-      setMessage("Alerts could not be enabled. Check your browser permission and try again.");
+    } catch (error) {
+      setMessage(pushSetupErrorMessage(error));
     } finally {
       setBusy(false);
     }
