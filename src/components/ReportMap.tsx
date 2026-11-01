@@ -46,10 +46,9 @@ export function ReportMap({ reports, center, zoom = 13 }: ReportMapProps) {
     const L = window.L;
 
     // Remove existing map if any
-    const existingMap = document.getElementById("report-map");
+    const existingMap = document.getElementById("report-map") as (HTMLElement & { _leaflet_id?: unknown; _leaflet_map?: { remove: () => void } }) | null;
     if (existingMap && existingMap._leaflet_id) {
-      // @ts-ignore
-      existingMap._leaflet_map.remove();
+      existingMap._leaflet_map?.remove();
     }
 
     // Calculate center from reports if not provided
