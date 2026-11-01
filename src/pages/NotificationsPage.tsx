@@ -28,7 +28,8 @@ function pushSetupErrorMessage(error: unknown): string {
       return "The push service rejected this site's application key. Reload the page and try again.";
     }
     if (error.name === "AbortError") {
-      return "The browser could not reach its push service. Check your connection and try again.";
+      const browserDetail = error.message ? `: ${error.message}` : ".";
+      return `The browser or push service aborted subscription setup${browserDetail}`;
     }
   }
   return error instanceof Error && error.message
