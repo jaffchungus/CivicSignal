@@ -341,9 +341,9 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         <button
           className="map-control-button"
           onClick={() => setShowLegend(!showLegend)}
-          title="Toggle legend"
+          title="Toggle report status"
         >
-          {showLegend ? "Hide Legend" : "Show Legend"}
+          {showLegend ? "Hide Status" : "Show Status"}
         </button>
         <button
           className="map-control-button"

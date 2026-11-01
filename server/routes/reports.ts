@@ -117,6 +117,7 @@ type ReportRow = {
   assigned_role: UserRole | null;
   reporter_confirmation: string | null;
   reporter_confirmed_at: number | null;
+  first_attachment_id: string | null;
   similar_report_id?: string | null;
   similarity_score?: number | null;
 };
@@ -134,7 +135,10 @@ const REPORT_SELECT = `
          reporter.id AS reporter_user_id, reporter.display_name AS reporter_display_name,
          assignee.id AS assigned_user_id, assignee.display_name AS assigned_display_name,
          assignee.role AS assigned_role,
-         reports.reporter_confirmation, reports.reporter_confirmed_at
+         reports.reporter_confirmation, reports.reporter_confirmed_at,
+         (SELECT attachments.id FROM attachments
+          WHERE attachments.report_id = reports.id
+          ORDER BY attachments.created_at, attachments.id LIMIT 1) AS first_attachment_id
   FROM reports
   JOIN categories ON categories.id = reports.category_id
   JOIN organizations ON organizations.id = reports.organization_id
@@ -301,6 +305,12 @@ function serializeSummary(row: ReportRow) {
     updatedAt: isoTime(row.updated_at),
     reporterConfirmation: row.reporter_confirmation as "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null,
     reporterConfirmedAt: row.reporter_confirmed_at ? isoTime(row.reporter_confirmed_at) : null,
+    attachments: row.first_attachment_id
+      ? [{
+          id: row.first_attachment_id,
+          url: `/api/reports/${row.id}/attachments/${row.first_attachment_id}`,
+        }]
+      : [],
     similarReportId: row.similar_report_id ?? null,
     similarityScore: row.similarity_score ?? null,
   };
