@@ -4,7 +4,8 @@ import { ReportMap } from "../components/ReportMap";
 import type { ReportListResponse, Category, Municipality } from "../../shared/contracts";
 
 export function MapPage() {
-  const list = useFetch<ReportListResponse>("/api/reports?scope=all");
+  // The API selects the caller's permitted report scope (mine, organization queue, or all for admins).
+  const list = useFetch<ReportListResponse>("/api/reports");
   const reports = list.data?.reports ?? [];
   const { loading, error, reload } = list;
 
@@ -29,7 +30,7 @@ export function MapPage() {
 
   // Filter reports that have coordinates
   const reportsWithCoords = reports.filter(
-    (report) => report.coordinates && report.coordinates.latitude && report.coordinates.longitude
+    (report) => report.coordinates !== null && report.coordinates !== undefined
   );
 
   // Auto-refresh effect
@@ -96,7 +97,7 @@ export function MapPage() {
         <div>
           <h1>Community Issues Map</h1>
           <p className="muted">
-            View all reported issues on an interactive map. Use filters to focus on specific areas or types of issues.
+            View reports available to your account on an interactive map. Use filters to focus on specific areas or types of issues.
           </p>
         </div>
         <div className="header-actions">
@@ -265,7 +266,7 @@ export function MapPage() {
             <div className="card empty">
               <h2>No Reports Available</h2>
               <p className="muted">
-                No reports with location data are currently available. Reports will appear on the map once they include GPS coordinates.
+                No reports with GPS pins are currently available in your report view. Reports appear here when a GPS pin is saved with them; text addresses alone cannot be placed on the map.
               </p>
             </div>
           ) : (
