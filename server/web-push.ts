@@ -16,7 +16,7 @@ const PUSH_TTL_SECONDS = 60 * 60 * 24;
 type VapidKeys = {
   publicKey: string;
   privateKey: string;
-  subject: string;
+  subject: string | null;
 };
 
 type StoredSubscription = {
@@ -34,14 +34,14 @@ function encodeBase64Url(value: Buffer): string {
   return value.toString("base64url");
 }
 
-function parseVapidKeys(publicKey: string, privateKey: string, subject: string): VapidKeys | null {
+function parseVapidKeys(publicKey: string, privateKey: string, subject: string | null): VapidKeys | null {
   const publicBytes = decodeBase64Url(publicKey);
   const privateBytes = decodeBase64Url(privateKey);
   if (publicBytes.length !== 65 || publicBytes[0] !== 4 || privateBytes.length !== 32) return null;
   return { publicKey, privateKey, subject };
 }
 
-function generateVapidKeys(subject: string): VapidKeys {
+function generateVapidKeys(subject: string | null): VapidKeys {
   const ecdh = createECDH("prime256v1");
   ecdh.generateKeys();
   return {
@@ -51,11 +51,20 @@ function generateVapidKeys(subject: string): VapidKeys {
   };
 }
 
-function vapidSubject(): string {
-  if (process.env.WEB_PUSH_SUBJECT) return process.env.WEB_PUSH_SUBJECT;
-  if (process.env.APP_ORIGIN) return process.env.APP_ORIGIN;
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  return "https://localhost";
+function validVapidSubject(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" || url.protocol === "mailto:" ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function vapidSubject(): string | null {
+  return validVapidSubject(process.env.WEB_PUSH_SUBJECT) ??
+    validVapidSubject(process.env.APP_ORIGIN) ??
+    validVapidSubject(process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
 }
 
 async function loadVapidKeys(database: CivicDatabase): Promise<VapidKeys | null> {
@@ -73,7 +82,7 @@ async function loadVapidKeys(database: CivicDatabase): Promise<VapidKeys | null>
     try {
       const stored = JSON.parse(existing.value) as { publicKey?: string; privateKey?: string; subject?: string };
       if (stored.publicKey && stored.privateKey) {
-        return parseVapidKeys(stored.publicKey, stored.privateKey, stored.subject ?? subject);
+        return parseVapidKeys(stored.publicKey, stored.privateKey, subject);
       }
     } catch {
       return null;
@@ -139,7 +148,7 @@ function authorizationHeader(keys: VapidKeys, audience: string): string {
   const payload = encodeBase64Url(Buffer.from(JSON.stringify({
     aud: audience,
     exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
-    sub: keys.subject,
+    ...(keys.subject ? { sub: keys.subject } : {}),
   })));
   const unsignedToken = `${header}.${payload}`;
   const signature = sign("sha256", Buffer.from(unsignedToken), {
