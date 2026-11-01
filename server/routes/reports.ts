@@ -299,6 +299,8 @@ function serializeSummary(row: ReportRow) {
     updatedAt: isoTime(row.updated_at),
     reporterConfirmation: row.reporter_confirmation as "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null,
     reporterConfirmedAt: row.reporter_confirmed_at ? isoTime(row.reporter_confirmed_at) : null,
+    similarReportId: row.similar_report_id ?? null,
+    similarityScore: row.similarity_score ?? null,
   };
 }
 
@@ -369,6 +371,15 @@ async function serializeDetail(
     row.location,
   );
 
+  // Check if this is a persistent problem
+  let isPersistentProblem = false;
+  let relatedReportCount = 0;
+  if (row.similar_report_id) {
+    const persistenceCheck = await detectPersistentProblem(database, row.id);
+    isPersistentProblem = persistenceCheck.isPersistent;
+    relatedReportCount = persistenceCheck.relatedReportCount;
+  }
+
   return {
     ...serializeSummary(row),
     attachments: attachments.map((attachment) => ({
@@ -423,6 +434,8 @@ async function serializeDetail(
           municipalityName: nearestRep.municipalityName,
         }
       : null,
+    isPersistentProblem,
+    relatedReportCount,
   };
 }
 

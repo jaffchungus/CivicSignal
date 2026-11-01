@@ -36,6 +36,13 @@ body {
   line-height: 1.55;
 }
 
+.suggestion-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--forest-700);
+  font-weight: 500;
+}
+
 button,
 input,
 select,
@@ -1452,11 +1459,26 @@ input[type="file"].input {
   background: #fbfdfb;
 }
 
+.notification-row.persistent-problem {
+  border-left: 4px solid var(--danger);
+  background: #fff3cd;
+}
+
+.notification-row.persistent-problem:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
 .notification-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 0.12rem;
+}
+
+.notification-metadata {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 4px;
 }
 
 .notification-title {

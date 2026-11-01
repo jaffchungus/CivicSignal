@@ -170,6 +170,10 @@ export type Report = {
     organizationName?: string;
     municipalityName?: string;
   } | null;
+  isPersistentProblem?: boolean;
+  relatedReportCount?: number;
+  similarReportId?: string | null;
+  similarityScore?: number | null;
 };
 
 export type PhotoAnalysisResult = {

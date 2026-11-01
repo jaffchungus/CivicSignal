@@ -218,13 +218,23 @@ export function NotificationsPage() {
             <li key={notification.id}>
               <button
                 type="button"
-                className={`notification-row${notification.read ? "" : " unread"}`}
+                className={`notification-row${notification.read ? "" : " unread"}${notification.type === "PERSISTENT_PROBLEM" ? " persistent-problem" : ""}`}
                 disabled={action.pending}
                 onClick={() => openNotification(notification)}
               >
                 <span className="notification-copy">
-                  <span className="notification-title">{notification.title}</span>
+                  <span className="notification-title">
+                    {notification.type === "PERSISTENT_PROBLEM" && "⚠️ "}
+                    {notification.title}
+                  </span>
                   <span className="muted">{notification.message}</span>
+                  {notification.metadata && (notification.metadata.relatedReportCount || notification.metadata.similarityScore) && (
+                    <span className="notification-metadata">
+                      {notification.metadata.relatedReportCount && `Related reports: ${notification.metadata.relatedReportCount}`}
+                      {notification.metadata.similarityScore && ` • Similarity: ${(notification.metadata.similarityScore * 100).toFixed(0)}%`}
+                      {notification.metadata.distanceMeters && ` • Distance: ${notification.metadata.distanceMeters.toFixed(0)}m`}
+                    </span>
+                  )}
                   <span className="muted">{formatDateTime(notification.createdAt)}</span>
                 </span>
                 {!notification.read && <span className="pill">New</span>}
