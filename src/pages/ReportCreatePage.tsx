@@ -481,31 +481,33 @@ export function ReportCreatePage() {
               </p>
             )}
 
-            <Field
-              label="Municipality"
-              hint="Select the municipality where this issue is located. If no staff are available in this municipality, the report will be automatically routed to the nearest officer."
-            >
-              <select
-                className="select"
-                value={form.municipalityId}
-                onChange={(event) => {
-                  setForm({ ...form, municipalityId: event.target.value });
-                  setSuggestedMunicipality(null);
-                }}
+            <div>
+              <Field
+                label="Municipality"
+                hint="Select the municipality where this issue is located. If no staff are available in this municipality, the report will be automatically routed to the nearest officer."
               >
-                <option value="">Select municipality...</option>
-                {municipalities.map((municipality) => (
-                  <option key={municipality.id} value={municipality.id}>
-                    {municipality.name}
-                  </option>
-                ))}
-              </select>
+                <select
+                  className="select"
+                  value={form.municipalityId}
+                  onChange={(event) => {
+                    setForm({ ...form, municipalityId: event.target.value });
+                    setSuggestedMunicipality(null);
+                  }}
+                >
+                  <option value="">Select municipality...</option>
+                  {municipalities.map((municipality) => (
+                    <option key={municipality.id} value={municipality.id}>
+                      {municipality.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               {suggestedMunicipality && form.municipalityId === suggestedMunicipality.id && (
                 <p className="muted suggestion-hint">
                   📍 Suggested based on your GPS location
                 </p>
               )}
-            </Field>
+            </div>
 
             <Field
               label="Precise location"

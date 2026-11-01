@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import L from "leaflet";
 import type { Report } from "../../shared/contracts";
 
 interface ReportMapProps {
@@ -33,14 +34,14 @@ const CLUSTER_MAX_ZOOM = 16;
 export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }: ReportMapProps) {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [hoveredReport, setHoveredReport] = useState<Report | null>(null);
-  const [mapLoaded, setMapLoaded] = useState(false);
   const [currentZoom, setCurrentZoom] = useState(zoom);
   const [showLegend, setShowLegend] = useState(true);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
-  const mapRef = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
-  const userLocationMarkerRef = useRef<any>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markersRef = useRef<L.Layer[]>([]);
+  const userLocationMarkerRef = useRef<L.Marker | null>(null);
 
   // Filter reports based on filters
   const filteredReports = useMemo(() => {
@@ -71,10 +72,13 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
   // Cluster reports (simple implementation)
   const clusteredReports = useMemo(() => {
     if (currentZoom >= CLUSTER_MAX_ZOOM) {
-      return filteredReports.map((report) => ({ type: "marker", report }));
+      return filteredReports.map((report) => ({ type: "marker" as const, report }));
     }
 
-    const clusters: Array<{ type: "cluster"; reports: Report[]; lat: number; lng: number; count: number }> = [];
+    const clusters: Array<
+      | { type: "cluster"; reports: Report[]; lat: number; lng: number; count: number }
+      | { type: "marker"; report: Report }
+    > = [];
     const used = new Set<string>();
 
     for (const report of filteredReports) {
@@ -116,32 +120,6 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
     return clusters;
   }, [filteredReports, currentZoom]);
 
-  // Load Leaflet CSS and JS dynamically
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const loadLeaflet = async () => {
-      // Load CSS
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      document.head.appendChild(link);
-
-      // Load JS
-      const script = document.createElement("script");
-      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      script.async = true;
-      script.onload = () => setMapLoaded(true);
-      document.body.appendChild(script);
-    };
-
-    loadLeaflet();
-
-    return () => {
-      // Cleanup would go here in a full implementation
-    };
-  }, []);
-
   // Get user location
   const getUserLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -170,26 +148,17 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
     );
   }, []);
 
-  // Initialize map once Leaflet is loaded
+  // Initialize map
   useEffect(() => {
-    if (!mapLoaded || typeof window === "undefined") return;
-
-    // @ts-ignore - Leaflet types not loaded
-    const L = window.L;
-
-    // Remove existing map if any
-    const existingMap = document.getElementById("report-map") as (HTMLElement & { _leaflet_id?: unknown; _leaflet_map?: { remove: () => void } }) | null;
-    if (existingMap && existingMap._leaflet_id) {
-      existingMap._leaflet_map?.remove();
-    }
+    if (typeof window === "undefined" || !mapContainerRef.current) return;
 
     // Calculate center from reports if not provided
     const mapCenter = center || (filteredReports.length > 0 && filteredReports[0].coordinates
       ? { lat: filteredReports[0].coordinates.latitude, lng: filteredReports[0].coordinates.longitude }
       : { lat: 40.7128, lng: -74.0060 }); // Default to NYC
 
-    // Create map
-    const map = L.map("report-map").setView([mapCenter.lat, mapCenter.lng], zoom);
+    // Create map directly on container ref
+    const map = L.map(mapContainerRef.current).setView([mapCenter.lat, mapCenter.lng], zoom);
     mapRef.current = map;
 
     // Add OpenStreetMap tiles
@@ -202,21 +171,29 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
       setCurrentZoom(map.getZoom());
     });
 
-    // Store map instance for cleanup
-    // @ts-ignore
-    document.getElementById("report-map")._leaflet_map = map;
-
     return () => {
       map.remove();
+      mapRef.current = null;
     };
-  }, [mapLoaded, center, zoom, filteredReports]);
+  }, []);
+
+  // Update center when center prop changes
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (center) {
+      mapRef.current.setView([center.lat, center.lng], zoom);
+    } else if (filteredReports.length > 0 && filteredReports[0].coordinates) {
+      mapRef.current.setView(
+        [filteredReports[0].coordinates.latitude, filteredReports[0].coordinates.longitude],
+        zoom
+      );
+    }
+  }, [center, zoom, filteredReports]);
 
   // Update markers when clustered reports change
   useEffect(() => {
-    if (!mapRef.current || !mapLoaded) return;
+    if (!mapRef.current) return;
 
-    // @ts-ignore
-    const L = window.L;
     const map = mapRef.current;
 
     // Clear existing markers
@@ -345,20 +322,11 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
       userLocationMarkerRef.current.remove();
       userLocationMarkerRef.current = null;
     }
-  }, [clusteredReports, mapLoaded, userLocation, onReportClick]);
-
-  if (!mapLoaded) {
-    return (
-      <div className="map-container loading">
-        <div className="loading-spinner"></div>
-        <p>Loading map...</p>
-      </div>
-    );
-  }
+  }, [clusteredReports, userLocation, onReportClick]);
 
   return (
     <div className="map-container">
-      <div id="report-map" style={{ height: "600px", width: "100%" }}></div>
+      <div ref={mapContainerRef} style={{ height: "600px", width: "100%" }}></div>
 
       {/* Map controls */}
       <div className="map-controls">

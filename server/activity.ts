@@ -96,7 +96,6 @@ export async function createNotification(
       title: input.title,
       message: input.message,
       reportId: input.reportId,
-      data: input.metadata,
     });
   }
 }

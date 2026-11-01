@@ -117,6 +117,8 @@ type ReportRow = {
   assigned_role: UserRole | null;
   reporter_confirmation: string | null;
   reporter_confirmed_at: number | null;
+  similar_report_id?: string | null;
+  similarity_score?: number | null;
 };
 
 const REPORT_SELECT = `
@@ -710,7 +712,8 @@ export function createReportsRouter(deps: {
               type: "MUNICIPALITY_FALLBACK",
               title: `Nearest officer assignment: ${referenceCode}`,
               message: `This report from municipality with no available staff has been routed to you as the nearest officer (${nearestStaff.distanceKm === Infinity ? 'no location data' : `${nearestStaff.distanceKm.toFixed(1)} km away`}).`,
-            }, true);
+              deferPush: true,
+            });
             pushRecipients.push(nearestStaff.id);
           }
         }
@@ -738,7 +741,8 @@ export function createReportsRouter(deps: {
               type: "PERSISTENT_PROBLEM",
               title: `Persistent problem detected: ${referenceCode}`,
               message: `This report appears to be a repeat of a similar issue you previously handled. ${persistenceCheck.relatedReportCount} related reports have been submitted for this location and category.`,
-            }, true);
+              deferPush: true,
+            });
             pushRecipients.push(originalReport.assigned_user_id);
           }
         }

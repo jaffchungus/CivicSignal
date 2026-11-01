@@ -6,6 +6,7 @@ import App from "./App";
 import { AuthProvider } from "./lib/auth";
 import { NotificationsProvider } from "./lib/notifications";
 import "./styles.css";
+import "leaflet/dist/leaflet.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
