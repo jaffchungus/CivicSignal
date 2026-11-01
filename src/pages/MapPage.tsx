@@ -105,13 +105,13 @@ export function MapPage() {
             onClick={reload}
             disabled={loading}
           >
-            {loading ? "Refreshing..." : "🔄 Refresh"}
+            {loading ? "Refreshing..." : "Refresh"}
           </button>
           <button
             className={`button ${autoRefresh ? "primary" : ""}`}
             onClick={() => setAutoRefresh(!autoRefresh)}
           >
-            {autoRefresh ? "⏸️ Auto-refresh on" : "▶️ Auto-refresh off"}
+            {autoRefresh ? "Auto-refresh on" : "Auto-refresh off"}
           </button>
           {autoRefresh && (
             <select
@@ -133,7 +133,7 @@ export function MapPage() {
         <div className="error" role="alert">
           <span>{error}</span>
           <button className="button" type="button" onClick={reload}>
-            Try again
+            Retry
           </button>
         </div>
       )}
@@ -263,9 +263,9 @@ export function MapPage() {
             </div>
           ) : reportsWithCoords.length === 0 ? (
             <div className="card empty">
-              <h2>No reports with location data</h2>
+              <h2>No Reports Available</h2>
               <p className="muted">
-                Reports will appear on the map once they include GPS coordinates.
+                No reports with location data are currently available. Reports will appear on the map once they include GPS coordinates.
               </p>
             </div>
           ) : (
@@ -307,6 +307,15 @@ export function MapPage() {
         .map-page .header-actions {
           display: flex;
           gap: 10px;
+          align-items: center;
+        }
+
+        .map-page .header-actions .button {
+          min-width: 140px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
         }
 
         .map-layout {
@@ -324,9 +333,10 @@ export function MapPage() {
 
         .sidebar-section {
           background: white;
-          padding: 16px;
+          padding: 20px;
           border-radius: 8px;
-          border: 1px solid #ddd;
+          border: 1px solid #e1e4e8;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.04);
         }
 
         .sidebar-header {
@@ -358,14 +368,24 @@ export function MapPage() {
         .filter-checkbox {
           display: flex;
           align-items: center;
-          gap: 8px;
-          padding: 6px 0;
+          gap: 10px;
+          padding: 8px 4px;
           cursor: pointer;
-          font-size: 13px;
+          font-size: 14px;
+          color: #24292f;
+          transition: background-color 0.15s ease;
+          border-radius: 4px;
+        }
+
+        .filter-checkbox:hover {
+          background-color: #f6f8fa;
         }
 
         .filter-checkbox input[type="checkbox"] {
           cursor: pointer;
+          width: 16px;
+          height: 16px;
+          accent-color: #0969da;
         }
 
         .filter-checkbox .status-dot {
@@ -409,27 +429,54 @@ export function MapPage() {
 
         .stat-item {
           text-align: center;
-          padding: 12px;
-          background: #f8f9fa;
+          padding: 16px 12px;
+          background: #f6f8fa;
           border-radius: 6px;
+          border: 1px solid #e1e4e8;
         }
 
         .stat-value {
           display: block;
-          font-size: 24px;
-          font-weight: bold;
-          color: #007bff;
+          font-size: 28px;
+          font-weight: 600;
+          color: #0969da;
+          line-height: 1.2;
         }
 
         .stat-label {
           display: block;
           font-size: 12px;
-          color: #666;
+          color: #57606a;
           margin-top: 4px;
+          font-weight: 500;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .map-area {
           min-height: 600px;
+        }
+
+        .map-area .card.empty {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 400px;
+          text-align: center;
+          padding: 48px;
+        }
+
+        .map-area .card.empty h2 {
+          margin: 0 0 12px 0;
+          font-size: 20px;
+          color: #333;
+        }
+
+        .map-area .card.empty p {
+          margin: 0;
+          max-width: 400px;
+          line-height: 1.5;
         }
 
         .filter-summary {

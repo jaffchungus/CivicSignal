@@ -504,7 +504,7 @@ export function ReportCreatePage() {
               </Field>
               {suggestedMunicipality && form.municipalityId === suggestedMunicipality.id && (
                 <p className="muted suggestion-hint">
-                  📍 Suggested based on your GPS location
+                  Suggested based on your GPS location
                 </p>
               )}
             </div>

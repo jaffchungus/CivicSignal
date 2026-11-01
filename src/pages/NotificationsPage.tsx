@@ -224,7 +224,6 @@ export function NotificationsPage() {
               >
                 <span className="notification-copy">
                   <span className="notification-title">
-                    {notification.type === "PERSISTENT_PROBLEM" && "⚠️ "}
                     {notification.title}
                   </span>
                   <span className="muted">{notification.message}</span>

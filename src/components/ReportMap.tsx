@@ -252,7 +252,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
                 : `<div class="marker-placeholder"></div>`
               }
               <div class="marker-status" style="background: ${statusColor}"></div>
-              ${isPersistent ? `<div class="persistent-badge">⚠️</div>` : ''}
+              ${isPersistent ? `<div class="persistent-badge">!</div>` : ''}
             </div>
           `,
           iconSize: [48, 48],
@@ -268,7 +268,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         const popupContent = `
           <div class="map-popup">
             <h3>${report.title}</h3>
-            ${isPersistent ? `<p class="persistent-warning">⚠️ Persistent problem (${report.relatedReportCount || 0} related reports)</p>` : ''}
+            ${isPersistent ? `<p class="persistent-warning">Persistent problem (${report.relatedReportCount || 0} related reports)</p>` : ''}
             <p><strong>Status:</strong> <span class="status-badge" style="background: ${statusColor}">${report.status}</span></p>
             <p><strong>Location:</strong> ${report.location}</p>
             <p><strong>Submitted:</strong> ${new Date(report.submittedAt).toLocaleDateString()}</p>
@@ -336,14 +336,14 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           disabled={isLocating}
           title="Show my location"
         >
-          {isLocating ? "Locating..." : "📍 My Location"}
+          {isLocating ? "Locating..." : "My Location"}
         </button>
         <button
           className="map-control-button"
           onClick={() => setShowLegend(!showLegend)}
           title="Toggle legend"
         >
-          {showLegend ? "📊 Hide Legend" : "📊 Show Legend"}
+          {showLegend ? "Hide Legend" : "Show Legend"}
         </button>
         <button
           className="map-control-button"
@@ -354,7 +354,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           }}
           title="Refresh map"
         >
-          🔄 Refresh
+          Refresh
         </button>
       </div>
 
@@ -422,7 +422,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           <div className="report-meta">
             {selectedReport.isPersistentProblem && (
               <div className="persistent-problem-alert">
-                <strong>⚠️ Persistent Problem</strong>
+                <strong>Persistent Problem</strong>
                 <p className="muted">This issue has been reported {selectedReport.relatedReportCount || 0} times by different residents at this location.</p>
               </div>
             )}
@@ -455,10 +455,10 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
       <style>{`
         .map-container {
           position: relative;
-          border: 1px solid #ddd;
-          border-radius: 12px;
+          border: 1px solid #e1e4e8;
+          border-radius: 8px;
           overflow: hidden;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
 
         .map-container.loading {
@@ -467,15 +467,15 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          background: #f5f5f5;
+          background: #f6f8fa;
           gap: 16px;
         }
 
         .loading-spinner {
           width: 40px;
           height: 40px;
-          border: 4px solid #e0e0e0;
-          border-top-color: #007bff;
+          border: 4px solid #e1e4e8;
+          border-top-color: #0969da;
           border-radius: 50%;
           animation: spin 1s linear infinite;
         }
@@ -496,22 +496,31 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
 
         .map-control-button {
           background: white;
-          border: 1px solid #ddd;
-          border-radius: 8px;
-          padding: 8px 12px;
+          border: 1px solid #d0d7de;
+          border-radius: 6px;
+          padding: 8px 16px;
           cursor: pointer;
-          font-size: 14px;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-          transition: all 0.2s;
+          font-size: 13px;
+          font-weight: 500;
+          color: #24292f;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+          transition: all 0.15s ease;
+          white-space: nowrap;
         }
 
         .map-control-button:hover:not(:disabled) {
-          background: #f8f9fa;
-          transform: translateY(-1px);
+          background: #f6f8fa;
+          border-color: #babbbd;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+        }
+
+        .map-control-button:active:not(:disabled) {
+          background: #f0f2f5;
+          transform: translateY(0);
         }
 
         .map-control-button:disabled {
-          opacity: 0.6;
+          opacity: 0.5;
           cursor: not-allowed;
         }
 
@@ -522,22 +531,26 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           background: white;
           padding: 16px;
           border-radius: 8px;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+          border: 1px solid #e1e4e8;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.12);
           z-index: 1000;
-          max-width: 200px;
+          max-width: 220px;
         }
 
         .map-legend h4 {
           margin: 0 0 12px 0;
           font-size: 14px;
+          font-weight: 600;
+          color: #24292f;
         }
 
         .legend-item {
           display: flex;
           align-items: center;
-          gap: 8px;
-          margin: 6px 0;
+          gap: 10px;
+          margin: 8px 0;
           font-size: 13px;
+          color: #24292f;
         }
 
         .legend-color {
@@ -553,7 +566,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         }
 
         .legend-color.user-legend {
-          background: #007bff;
+          background: #0969da;
           border-radius: 50%;
         }
 
@@ -569,19 +582,22 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           background: white;
           padding: 12px 16px;
           border-radius: 8px;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+          border: 1px solid #e1e4e8;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.12);
           z-index: 1000;
         }
 
         .map-stats h4 {
           margin: 0 0 4px 0;
           font-size: 14px;
+          font-weight: 600;
+          color: #24292f;
         }
 
         .map-stats .muted {
           margin: 0;
           font-size: 12px;
-          color: #666;
+          color: #57606a;
         }
 
         .report-marker-icon {
@@ -630,7 +646,8 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 12px;
+          font-size: 14px;
+          font-weight: 700;
           border: 2px solid white;
           box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
@@ -644,11 +661,18 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         .marker-placeholder {
           width: 100%;
           height: 100%;
-          background: #e0e0e0;
+          background: #e1e4e8;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 20px;
+        }
+
+        .marker-placeholder::before {
+          content: "";
+          width: 20px;
+          height: 20px;
+          background: #8b949e;
+          border-radius: 50%;
         }
 
         .marker-status {
@@ -666,13 +690,13 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         .cluster-content {
           width: 40px;
           height: 40px;
-          background: #666;
+          background: #24292f;
           color: white;
           border-radius: 50%;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-weight: bold;
+          font-weight: 600;
           font-size: 14px;
           box-shadow: 0 2px 6px rgba(0,0,0,0.3);
           cursor: pointer;
@@ -690,9 +714,9 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         .user-location-pulse {
           width: 20px;
           height: 20px;
-          background: #007bff;
+          background: #0969da;
           border-radius: 50%;
-          box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7);
+          box-shadow: 0 0 0 0 rgba(9, 105, 218, 0.7);
           animation: pulse 2s infinite;
         }
 
@@ -712,24 +736,26 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         }
 
         .map-popup {
-          min-width: 220px;
+          min-width: 240px;
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
         .map-popup.cluster-popup {
-          min-width: 180px;
+          min-width: 200px;
         }
 
         .map-popup h3 {
           margin: 0 0 10px 0;
           font-size: 14px;
-          color: #333;
+          font-weight: 600;
+          color: #24292f;
         }
 
         .map-popup p {
           margin: 6px 0;
           font-size: 12px;
-          color: #555;
+          color: #57606a;
+          line-height: 1.5;
         }
 
         .map-popup .status-dot {
@@ -752,7 +778,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         .map-popup .view-link {
           display: inline-block;
           margin-top: 10px;
-          color: #007bff;
+          color: #0969da;
           text-decoration: none;
           font-size: 12px;
           font-weight: 500;
@@ -763,17 +789,17 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         }
 
         .map-popup .muted {
-          color: #888;
+          color: #8b949e;
           font-style: italic;
         }
 
         .map-popup .persistent-warning {
-          background: #fff3cd;
-          border-left: 3px solid #ffc107;
+          background: #fff8c5;
+          border-left: 3px solid #d29922;
           padding: 8px 12px;
           margin: 8px 0;
           font-size: 12px;
-          color: #856404;
+          color: #6f4e37;
         }
 
         .map-tooltip {
@@ -783,6 +809,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           background: white;
           padding: 12px 16px;
           border-radius: 8px;
+          border: 1px solid #e1e4e8;
           box-shadow: 0 4px 12px rgba(0,0,0,0.15);
           z-index: 1000;
           max-width: 300px;
@@ -803,13 +830,14 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         .map-tooltip h4 {
           margin: 0 0 8px 0;
           font-size: 14px;
-          color: #333;
+          font-weight: 600;
+          color: #24292f;
         }
 
         .map-tooltip p {
           margin: 4px 0;
           font-size: 13px;
-          color: #555;
+          color: #57606a;
         }
 
         .map-tooltip .status-badge {
@@ -828,7 +856,8 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           right: 60px;
           background: white;
           padding: 20px;
-          border-radius: 12px;
+          border-radius: 8px;
+          border: 1px solid #e1e4e8;
           box-shadow: 0 4px 16px rgba(0,0,0,0.15);
           z-index: 1000;
           max-width: 400px;
@@ -860,19 +889,20 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           width: 32px;
           height: 32px;
           line-height: 1;
-          color: #666;
+          color: #8b949e;
           transition: color 0.2s;
         }
 
         .map-details-panel .close-button:hover {
-          color: #333;
+          color: #24292f;
         }
 
         .map-details-panel h3 {
           margin: 0 0 16px 0;
           padding-right: 36px;
           font-size: 18px;
-          color: #333;
+          font-weight: 600;
+          color: #24292f;
         }
 
         .map-details-panel .report-image {
@@ -881,6 +911,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           border-radius: 8px;
           margin-bottom: 16px;
           object-fit: cover;
+          border: 1px solid #e1e4e8;
         }
 
         .map-details-panel .report-meta {
@@ -892,13 +923,13 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         .map-details-panel .report-meta p {
           margin: 0;
           font-size: 14px;
-          color: #555;
+          color: #57606a;
           line-height: 1.5;
         }
 
         .map-details-panel .persistent-problem-alert {
-          background: #fff3cd;
-          border: 1px solid #ffc107;
+          background: #fff8c5;
+          border: 1px solid #d29922;
           border-radius: 6px;
           padding: 12px;
           margin-bottom: 12px;
@@ -906,18 +937,20 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
 
         .map-details-panel .persistent-problem-alert strong {
           display: block;
-          color: #856404;
+          color: #6f4e37;
           margin-bottom: 4px;
+          font-weight: 600;
         }
 
         .map-details-panel .persistent-problem-alert .muted {
           margin: 0;
           font-size: 13px;
-          color: #856404;
+          color: #6f4e37;
         }
 
         .map-details-panel .report-meta strong {
-          color: #333;
+          color: #24292f;
+          font-weight: 600;
         }
 
         .map-details-panel .status-badge {
@@ -940,8 +973,14 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         }
 
         .map-details-panel .button.primary {
-          background: #007bff;
+          background: #0969da;
           color: white;
+          border-color: #0969da;
+        }
+
+        .map-details-panel .button.primary:hover {
+          background: #0860ca;
+          border-color: #0860ca;
         }
 
         .map-details-panel .button.primary:hover {
