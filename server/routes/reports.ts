@@ -26,7 +26,7 @@ import {
   recordReportEvent,
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
-import { resolveMunicipalityRepresentative } from "../jurisdiction.js";
+import { resolveMunicipalityRepresentative, routeReportToOrganization } from "../jurisdiction.js";
 import { findNearestStaff } from "../municipality-fallback.js";
 import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
 import {
@@ -544,24 +544,6 @@ export function createReportsRouter(deps: {
     guestToken?: string,
   ): Promise<{ report: Awaited<ReturnType<typeof serializeDetail>>; guestAccessToken?: string }> {
     const input = createReportSchema.parse(request.body);
-    const category = (await database
-      .prepare(
-        `SELECT categories.id, categories.name, categories.organization_id
-         FROM categories
-         JOIN organizations ON organizations.id = categories.organization_id
-         WHERE categories.id = ? AND categories.active = 1 AND organizations.active = 1`,
-      )
-      .get(input.categoryId)) as
-      | { id: string; name: string; organization_id: string }
-      | undefined;
-    if (!category) {
-      throw new ApiError(
-        422,
-        "VALIDATION_ERROR",
-        "The request contains invalid fields.",
-        { categoryId: ["Choose a category routed to an active organization."] },
-      );
-    }
 
     // Validate municipality if provided
     let municipalityId = input.municipalityId ?? null;
@@ -578,6 +560,31 @@ export function createReportsRouter(deps: {
         );
       }
     }
+
+    // Route the report to the best organization based on municipality and location
+    const coordinates = input.latitude !== null && input.longitude !== null
+      ? { latitude: input.latitude, longitude: input.longitude }
+      : null;
+    const routing = await routeReportToOrganization(
+      database,
+      input.categoryId,
+      municipalityId,
+      coordinates,
+    );
+
+    // Get the category name for the title
+    const categoryRow = (await database
+      .prepare("SELECT name FROM categories WHERE id = ?")
+      .get(routing.categoryId)) as { name: string } | undefined;
+
+    const category = {
+      id: routing.categoryId,
+      name: categoryRow?.name || "Issue",
+      organization_id: routing.organizationId,
+    };
+
+    // Override municipalityId with the routed municipality
+    municipalityId = routing.municipalityId;
 
     const title = input.title || `${category.name} issue`;
     const description = input.description;

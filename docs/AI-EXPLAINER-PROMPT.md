@@ -3,7 +3,8 @@
 Copy this into an AI assistant that can read this repository and browse official sources. Fill in the bracketed details first.
 
 ```text
-Explain this project and its Congressional App Challenge situation to me in plain English, like a patient teammate. I am [name/grade], and I personally worked on [what I actually built, changed, tested, and understand].
+Just do the explainer backend part thingy for this prompt:
+Explain this project and its Congressional App Challenge situation to me in plain English, like a patient teammate.
 
 Start by inspecting the current repository and its actual behavior. Explain:
 1. What CivicSignal does in a normal report flow, in five short steps.
