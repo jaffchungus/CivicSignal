@@ -562,7 +562,7 @@ export function createReportsRouter(deps: {
     }
 
     // Route the report to the best organization based on municipality and location
-    const coordinates = input.latitude !== null && input.longitude !== null
+    const coordinates = input.latitude !== undefined && input.longitude !== undefined
       ? { latitude: input.latitude, longitude: input.longitude }
       : null;
     const routing = await routeReportToOrganization(
