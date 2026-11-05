@@ -8,11 +8,10 @@ import { useAuth } from "../lib/auth";
 import { clearDraftPhoto, loadDraftPhoto, saveDraftPhoto } from "../lib/report-photo-draft";
 import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
 import { isCoordinateOnlyLocation } from "../../shared/report-location";
-import type { Category, Municipality, PhotoAnalysisResult, Report } from "../../shared/contracts";
+import type { Category, PhotoAnalysisResult, Report } from "../../shared/contracts";
 
 type Draft = {
   categoryId: string;
-  municipalityId: string;
   title: string;
   description: string;
   location: string;
@@ -31,7 +30,7 @@ type LocationLookupInfo = {
   policyUrl?: string;
   usageNote?: string;
 };
-const emptyDraft: Draft = { categoryId: "", municipalityId: "", title: "", description: "", location: "", latitude: null, longitude: null };
+const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "", latitude: null, longitude: null };
 
 function readDraft(key: string): Draft {
   try {
@@ -78,12 +77,9 @@ export function ReportCreatePage() {
   const [locationLookupBusy, setLocationLookupBusy] = useState(false);
   const [resolvingAddress, setResolvingAddress] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
-  const [suggestedMunicipality, setSuggestedMunicipality] = useState<Municipality | null>(null);
   const { data, loading: categoriesLoading, error: categoriesError, reload } =
     useFetch<{ categories: Category[] }>("/api/categories");
   const categories = data?.categories ?? [];
-  const { data: municipalitiesData } = useFetch<{ municipalities: Municipality[] }>("/api/municipalities");
-  const municipalities = municipalitiesData?.municipalities ?? [];
   const { data: routingReadiness } = useFetch<RoutingReadiness>("/api/routing/readiness");
   const { data: locationLookupInfo } = useFetch<LocationLookupInfo>("/api/location/attribution");
   const { pending, error, fieldErrors, run } = useAction();
@@ -155,20 +151,6 @@ export function ReportCreatePage() {
         setLocationMessage(`Precise pin saved (${coords.latitude.toFixed(6)}, ${coords.longitude.toFixed(6)}). Looking up a nearby address…`);
         setLocationLookupBusy(false);
         setResolvingAddress(true);
-
-        // Suggest municipality based on coordinates
-        const suggested = municipalities.find((m) => {
-          if (!m.centerLatitude || !m.centerLongitude) return false;
-          const distance = Math.sqrt(
-            Math.pow(coords.latitude - m.centerLatitude, 2) +
-            Math.pow(coords.longitude - m.centerLongitude, 2)
-          );
-          return distance < 0.05; // ~5km radius
-        });
-        if (suggested && !form.municipalityId) {
-          setSuggestedMunicipality(suggested);
-          setForm((current) => ({ ...current, municipalityId: suggested.id }));
-        }
 
         void api.post<{ address: string }>("/api/location/reverse", {
           ...coordinates,
@@ -256,7 +238,6 @@ export function ReportCreatePage() {
     await run(async () => {
       const payload = new FormData();
       payload.set("categoryId", form.categoryId);
-      if (form.municipalityId) payload.set("municipalityId", form.municipalityId);
       payload.set("title", form.title);
       payload.set("description", form.description);
       payload.set("location", form.location);
@@ -480,34 +461,6 @@ export function ReportCreatePage() {
                 AI selected {chosenCategory.name}; this report will go to {chosenCategory.organizationName}.
               </p>
             )}
-
-            <div>
-              <Field
-                label="Municipality"
-                hint="Select the municipality where this issue is located. If no staff are available in this municipality, the report will be automatically routed to the nearest officer."
-              >
-                <select
-                  className="select"
-                  value={form.municipalityId}
-                  onChange={(event) => {
-                    setForm({ ...form, municipalityId: event.target.value });
-                    setSuggestedMunicipality(null);
-                  }}
-                >
-                  <option value="">Select municipality...</option>
-                  {municipalities.map((municipality) => (
-                    <option key={municipality.id} value={municipality.id}>
-                      {municipality.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              {suggestedMunicipality && form.municipalityId === suggestedMunicipality.id && (
-                <p className="muted suggestion-hint">
-                  Suggested based on your GPS location
-                </p>
-              )}
-            </div>
 
             <Field
               label="Precise location"
