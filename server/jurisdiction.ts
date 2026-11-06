@@ -1,4 +1,5 @@
 import type { CivicDatabase } from "./database.js";
+import { ApiError } from "./http.js";
 
 export type Coordinates = { latitude: number; longitude: number };
 
@@ -298,7 +299,12 @@ export async function routeReportToOrganization(
     | undefined;
 
   if (!defaultCategory) {
-    throw new Error(`No active category found with id: ${categoryId}`);
+    throw new ApiError(
+      422,
+      "VALIDATION_ERROR",
+      "The request contains invalid fields.",
+      { categoryId: ["Choose a category routed to an active organization."] },
+    );
   }
 
   return {
