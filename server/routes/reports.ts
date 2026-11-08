@@ -539,8 +539,9 @@ async function notifyReporterOfReport(
 export function createReportsRouter(deps: {
   database: CivicDatabase;
   photos: PhotoStore;
+  sessionCookie: string;
 }): Router {
-  const { database, photos } = deps;
+  const { database, photos, sessionCookie } = deps;
   const router = Router();
   const reportCreationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
@@ -568,7 +569,7 @@ export function createReportsRouter(deps: {
   // nothing is written for requests rejected by the file filter or size limit.
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: MAX_REPORT_PHOTO_BYTES, files: 1 },
+    limits: { fileSize: MAX_REPORT_PHOTO_BYTES, files: 1, fields: 20, parts: 25 },
     fileFilter: (_request, file, callback) => {
       if (!ALLOWED_IMAGE_TYPES.has(file.mimetype.toLowerCase())) {
         callback(
@@ -950,7 +951,7 @@ export function createReportsRouter(deps: {
     });
   }
 
-  router.get("/", authenticate(database), async (request, response) => {
+  router.get("/", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const query = listQuerySchema.parse(request.query);
 
@@ -1029,7 +1030,7 @@ export function createReportsRouter(deps: {
     });
   });
 
-  router.get("/impact", authenticate(database), requireStaff(), async (request, response) => {
+  router.get("/impact", authenticate(database, sessionCookie), requireStaff(), async (request, response) => {
     const user = currentUser(request);
     const { days } = impactQuerySchema.parse(request.query);
     const now = Date.now();
@@ -1152,7 +1153,7 @@ export function createReportsRouter(deps: {
 
   router.post(
     "/",
-    authenticate(database),
+    authenticate(database, sessionCookie),
     requireRole("RESIDENT"),
     reportCreationLimiter,
     upload.single("photo"),
@@ -1228,14 +1229,14 @@ export function createReportsRouter(deps: {
       .send(photo);
   });
 
-  router.get("/:reportId", authenticate(database), async (request, response) => {
+  router.get("/:reportId", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     assertCanView(row, user);
     response.json(await serializeDetail(database, row, user));
   });
 
-  router.post("/:reportId/still-happening", authenticate(database), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
+  router.post("/:reportId/still-happening", authenticate(database, sessionCookie), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     if (row.reporter_user_id !== user.id) {
@@ -1244,7 +1245,7 @@ export function createReportsRouter(deps: {
     response.json(await recordStillHappening(row, user.id));
   });
 
-  router.post("/:reportId/confirm-fixed", authenticate(database), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
+  router.post("/:reportId/confirm-fixed", authenticate(database, sessionCookie), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     if (row.reporter_user_id !== user.id) {
@@ -1253,7 +1254,7 @@ export function createReportsRouter(deps: {
     response.json(await recordConfirmation(row, "FIXED", user.id));
   });
 
-  router.post("/:reportId/confirm-unknown", authenticate(database), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
+  router.post("/:reportId/confirm-unknown", authenticate(database, sessionCookie), requireRole("RESIDENT"), residentConfirmationLimiter, async (request, response) => {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     if (row.reporter_user_id !== user.id) {
@@ -1264,7 +1265,7 @@ export function createReportsRouter(deps: {
 
   router.get(
     "/:reportId/attachments/:attachmentId",
-    authenticate(database),
+    authenticate(database, sessionCookie),
     async (request, response) => {
       const user = currentUser(request);
       const reportId = pathId(request, "reportId");
@@ -1296,7 +1297,7 @@ export function createReportsRouter(deps: {
 
   router.post(
     "/:reportId/claim",
-    authenticate(database),
+    authenticate(database, sessionCookie),
     requireStaff(),
     async (request, response) => {
       const user = currentUser(request);
@@ -1360,7 +1361,7 @@ export function createReportsRouter(deps: {
     },
   );
 
-  router.get("/:reportId/handoff-options", authenticate(database), requireStaff(), async (request, response) => {
+  router.get("/:reportId/handoff-options", authenticate(database, sessionCookie), requireStaff(), async (request, response) => {
     const user = currentUser(request);
     const row = await loadReport(database, pathId(request, "reportId"));
     assertCanView(row, user);
@@ -1378,7 +1379,7 @@ export function createReportsRouter(deps: {
     });
   });
 
-  router.post("/:reportId/handoff", authenticate(database), requireStaff(), async (request, response) => {
+  router.post("/:reportId/handoff", authenticate(database, sessionCookie), requireStaff(), async (request, response) => {
     const user = currentUser(request);
     const input = handoffSchema.parse(request.body);
     const row = await loadReport(database, pathId(request, "reportId"));
@@ -1467,7 +1468,7 @@ export function createReportsRouter(deps: {
     response.json(await serializeDetail(database, await loadReport(database, row.id), user));
   });
 
-  router.post("/:reportId/transfer", authenticate(database), requireStaff(), async (request, response) => {
+  router.post("/:reportId/transfer", authenticate(database, sessionCookie), requireStaff(), async (request, response) => {
     const user = currentUser(request);
     const input = transferSchema.parse(request.body);
     const row = await loadReport(database, pathId(request, "reportId"));
@@ -1618,7 +1619,7 @@ export function createReportsRouter(deps: {
 
   router.post(
     "/:reportId/status",
-    authenticate(database),
+    authenticate(database, sessionCookie),
     requireStaff(),
     async (request, response) => {
       const user = currentUser(request);
@@ -1683,7 +1684,7 @@ export function createReportsRouter(deps: {
 
   router.post(
     "/:reportId/updates",
-    authenticate(database),
+    authenticate(database, sessionCookie),
     requireStaff(),
     async (request, response) => {
       const user = currentUser(request);
@@ -1730,7 +1731,7 @@ export function createReportsRouter(deps: {
 
   router.post(
     "/:reportId/moderation",
-    authenticate(database),
+    authenticate(database, sessionCookie),
     requireRole("ADMIN"),
     async (request, response) => {
       const user = currentUser(request);

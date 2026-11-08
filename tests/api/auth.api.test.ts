@@ -3,7 +3,14 @@
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cleanupApplications, setupAdministrator, testApplication } from "./helpers";
+import { DEFAULT_SESSION_TTL_MS, resolveSessionTtlMs } from "../../server/session";
+import { ADMIN_CREDENTIALS, cleanupApplications, setupAdministrator, testApplication } from "./helpers";
+
+function cookiesFrom(response: { headers: Record<string, unknown> }): string[] {
+  const value = response.headers["set-cookie"];
+  if (Array.isArray(value)) return value.map(String);
+  return value === undefined ? [] : [String(value)];
+}
 
 afterEach(async () => {
   await cleanupApplications();
@@ -21,6 +28,157 @@ describe("authentication", () => {
       expect(response.headers["cache-control"]).toBe("private, no-store");
     }
     expect((await request(app).get("/api/reports")).status).toBe(401);
+  });
+
+  it("issues new sessions that last two hours", async () => {
+    const app = await testApplication();
+    const response = await request(app)
+      .post("/api/setup")
+      .send(ADMIN_CREDENTIALS)
+      .expect(201);
+
+    const cookie = String(response.headers["set-cookie"]);
+    expect(cookie).toContain("civicsignal_session=");
+    expect(cookie).not.toContain("__Host-");
+    expect(cookie).toContain("Max-Age=7200");
+    expect(DEFAULT_SESSION_TTL_MS).toBe(7_200_000);
+  });
+
+  it("uses a __Host- session cookie in production and clears it consistently", async () => {
+    const app = await testApplication({ secureCookies: true });
+    const setup = await request(app).post("/api/setup").send(ADMIN_CREDENTIALS).expect(201);
+    const setupCookies = cookiesFrom(setup);
+    const hardened = setupCookies.find((cookie) =>
+      cookie.startsWith("__Host-civicsignal_session="),
+    );
+
+    expect(hardened).toBeDefined();
+    expect(hardened).toContain("Path=/");
+    expect(hardened).toContain("Secure");
+    expect(hardened).toContain("HttpOnly");
+    expect(hardened).toContain("SameSite=Lax");
+    // The app must not issue an unprefixed session value in production mode.
+    expect(setupCookies.some((cookie) => /^civicsignal_session=[^;]/.test(cookie))).toBe(false);
+
+    const pair = hardened!.split(";")[0];
+    const token = pair.slice(pair.indexOf("=") + 1);
+
+    await request(app)
+      .get("/api/auth/session")
+      .set("Cookie", pair)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.user).toMatchObject({ email: ADMIN_CREDENTIALS.email });
+      });
+
+    // A subdomain-planted unprefixed cookie cannot authenticate in production.
+    await request(app)
+      .get("/api/auth/session")
+      .set("Cookie", `civicsignal_session=${token}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.user).toBeNull();
+      });
+    await request(app)
+      .get("/api/reports")
+      .set("Cookie", `civicsignal_session=${token}`)
+      .expect(401);
+
+    // Sign-in uses the same hardened name and drops a legacy cookie.
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: ADMIN_CREDENTIALS.email, password: ADMIN_CREDENTIALS.password })
+      .expect(200);
+    const loginCookies = cookiesFrom(login);
+    expect(
+      loginCookies.some((cookie) => cookie.startsWith("__Host-civicsignal_session=")),
+    ).toBe(true);
+    expect(loginCookies.some((cookie) => cookie.startsWith("civicsignal_session=;"))).toBe(true);
+
+    // Sign-out clears the hardened cookie and ends the session server-side.
+    const logout = await request(app)
+      .post("/api/auth/logout")
+      .set("Cookie", pair)
+      .expect(204);
+    expect(
+      cookiesFrom(logout).some(
+        (cookie) =>
+          cookie.startsWith("__Host-civicsignal_session=;") &&
+          cookie.includes("Expires=Thu, 01 Jan 1970"),
+      ),
+    ).toBe(true);
+
+    await request(app)
+      .get("/api/auth/session")
+      .set("Cookie", pair)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.user).toBeNull();
+      });
+  });
+
+  it("keeps the default lifetime when SESSION_TTL_HOURS is unusable", () => {
+    for (const value of [undefined, "", "  ", "soon", "0", "-3", "Infinity"]) {
+      expect(resolveSessionTtlMs({ SESSION_TTL_HOURS: value })).toBe(DEFAULT_SESSION_TTL_MS);
+    }
+    expect(resolveSessionTtlMs({ SESSION_TTL_HOURS: "8" })).toBe(28_800_000);
+  });
+
+  it("rejects state-changing requests that come from another site", async () => {
+    const app = await testApplication();
+    await setupAdministrator(app);
+
+    await request(app)
+      .post("/api/auth/login")
+      .set("Origin", "https://evil.example")
+      .send({ email: "admin@example.test", password: "correct horse battery staple" })
+      .expect(403)
+      .expect(({ body }) => {
+        expect(body.error.code).toBe("CROSS_ORIGIN_REQUEST");
+      });
+
+    await request(app)
+      .post("/api/auth/login")
+      .set("Host", "civicsignal.example")
+      .set("Origin", "http://civicsignal.example")
+      .send({ email: "admin@example.test", password: "correct horse battery staple" })
+      .expect(200);
+  });
+
+  it("revokes other sessions when the password changes", async () => {
+    const app = await testApplication();
+    await setupAdministrator(app);
+
+    const first = request.agent(app);
+    const second = request.agent(app);
+    for (const agent of [first, second]) {
+      await agent
+        .post("/api/auth/login")
+        .send({ email: "admin@example.test", password: "correct horse battery staple" })
+        .expect(200);
+    }
+
+    await first
+      .patch("/api/auth/password")
+      .send({
+        currentPassword: "correct horse battery staple",
+        newPassword: "a brand new administrator password",
+      })
+      .expect(200);
+
+    await first
+      .get("/api/auth/session")
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.user).not.toBeNull();
+      });
+
+    await second
+      .get("/api/auth/session")
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.user).toBeNull();
+      });
   });
 
   it("limits repeated sign-in attempts from one client", async () => {

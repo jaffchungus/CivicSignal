@@ -4,3 +4,11 @@ packages:
 allowBuilds:
   better-sqlite3: true
   esbuild: true
+
+# Patched releases for advisories in transitive dependencies.
+overrides:
+  body-parser: ^2.4.0
+  ip-address: ^10.7.4
+  qs: ^6.16.1
+  undici: ^6.29.1
+  zod: ^4.6.7

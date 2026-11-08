@@ -26,6 +26,10 @@ Open the Vite URL printed by the client process (normally `http://localhost:5173
 
 Local defaults use `./data/civicsignal.db` and `./uploads`; both are ignored by Git. No demo credentials or seeded real-world reports are included. To start over locally, stop the app and remove only those local development files.
 
+## Security headers
+
+Every response carries a strict Content-Security-Policy (`script-src 'self'` and `style-src 'self'`, no inline or eval script/styles), `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `strict-origin-when-cross-origin`, a restrictive `Permissions-Policy` (geolocation is limited to this origin because the location button uses it), and same-origin COOP/CORP. Production HTTPS responses add `Strict-Transport-Security` and `upgrade-insecure-requests`; plain-HTTP local development omits both so localhost keeps working. The standalone server sets the policy in Express; Vercel serves `dist/client` from its CDN, so `vercel.json` mirrors the same values for those responses.
+
 ## Environment variables
 
 Copy `.env.example` and replace placeholders only in your local ignored `.env.local` or the hosting provider's secret settings. Never commit a real secret.
@@ -35,7 +39,8 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `PORT` | Local Express port (default `3001`). |
 | `DATABASE_PATH` | SQLite file for local development (default `./data/civicsignal.db`). |
 | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
-| `SESSION_TTL_DAYS` | Local session expiry in days (local entry defaults to 14). |
+| `APP_ORIGIN` | Public origin (for example `https://civicsignal.example`). Requests that change data must come from this origin or the host that served them; comma-separate multiple origins. Needed behind a TLS-terminating proxy that does not forward `X-Forwarded-Proto`. |
+| `SESSION_TTL_HOURS` | Absolute session lifetime in hours (default `2`). Invalid or non-positive values fall back to the default. |
 | `GEMINI_API_KEY` | Server-only Google Gemini API key. When configured, selecting a photo asks Gemini 3 Flash Preview for an editable category, title, and description suggestion. The resident always chooses the final active category, which determines the receiving organization. Photos and AI classification are optional; text-only reports are accepted. Never use a `VITE_` or `NEXT_PUBLIC_` prefix; the deployment operator must verify the audience and API use meet Google's current terms. |
 | `DISABLE_GEMINI_PHOTO_ANALYSIS` | Optional emergency switch. Set to `true` to disable classification even when `GEMINI_API_KEY` is configured; report submission is unavailable while classification is disabled. |
 | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |

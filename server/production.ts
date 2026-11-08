@@ -6,6 +6,7 @@ import { PhotoFallbackStore } from "./photo-fallback.js";
 import { SupabasePhotoStore } from "./photo-supabase.js";
 import type { PhotoStore } from "./photo-store.js";
 import { createSupabaseServerClient } from "./supabase.js";
+import { resolveSessionTtlMs } from "./session.js";
 
 type Environment = Record<string, string | undefined>;
 
@@ -165,6 +166,7 @@ export async function createProductionApp() {
     database,
     photos,
     photoStorageAvailable: true,
+    sessionTtlMs: resolveSessionTtlMs(),
     secureCookies: process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL),
   });
 }

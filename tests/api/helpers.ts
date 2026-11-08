@@ -13,8 +13,15 @@ import { DiskPhotoStore } from "../../server/photo-store";
 const closers: Array<() => Promise<void>> = [];
 const temporaryDirectories: string[] = [];
 
+type TestApplicationOptions = {
+  secureCookies?: boolean;
+  sessionTtlMs?: number;
+};
+
 /** Creates a fresh CivicSignal app on a throwaway database and exposes its upload directory. */
-export async function testApplicationWithUploads(): Promise<{
+export async function testApplicationWithUploads(
+  options: TestApplicationOptions = {},
+): Promise<{
   app: Express;
   uploadDirectory: string;
 }> {
@@ -23,14 +30,21 @@ export async function testApplicationWithUploads(): Promise<{
   const uploadDirectory = path.join(directory, "uploads");
   const database = await createSqliteDatabase(path.join(directory, "test.sqlite"));
   const photos = new DiskPhotoStore(uploadDirectory);
-  const { app, close } = createApp({ database, photos, secureCookies: false });
+  const { app, close } = createApp({
+    database,
+    photos,
+    secureCookies: options.secureCookies ?? false,
+    ...(options.sessionTtlMs === undefined ? {} : { sessionTtlMs: options.sessionTtlMs }),
+  });
   closers.push(close);
   return { app, uploadDirectory };
 }
 
 /** Creates a fresh CivicSignal app on a throwaway database. */
-export async function testApplication(): Promise<Express> {
-  return (await testApplicationWithUploads()).app;
+export async function testApplication(
+  options: TestApplicationOptions = {},
+): Promise<Express> {
+  return (await testApplicationWithUploads(options)).app;
 }
 
 /** Closes database handles before removing temp directories (required on Windows). */

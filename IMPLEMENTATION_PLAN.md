@@ -58,7 +58,7 @@ clean database through the UI and the API.
    organization + verified_at), suspend/reinstate, organization/category management,
    report moderation (hide/restore/remove), audit listing.
 8. **`server/index.ts` entry:** env config (`PORT`, `DATABASE_PATH`, `UPLOAD_DIR`,
-   `APP_ORIGIN`, `SESSION_TTL_DAYS`), helmet, compression, rate limiting, static uploads,
+   `APP_ORIGIN`, `SESSION_TTL_HOURS`), helmet, compression, rate limiting, static uploads,
    production static client + SPA fallback, graceful shutdown that closes the DB.
 9. **Frontend:** API client, auth context, router with role-aware pages: first-run setup,
    sign in / sign up, resident dashboard (my reports + report an issue), report detail

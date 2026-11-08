@@ -1,5 +1,5 @@
-const CACHE = "civicsignal-shell-v4";
-const APP_SHELL = ["/", "/offline.html", "/manifest.webmanifest", "/favicon.svg", "/icon-192.png", "/icon-512.png"];
+const CACHE = "civicsignal-shell-v5";
+const APP_SHELL = ["/", "/offline.html", "/offline.css", "/manifest.webmanifest", "/favicon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL)));

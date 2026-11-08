@@ -3,12 +3,11 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
-import express from "express";
-
-import { createApp } from "./app.js";
+import { attachClient, createApp } from "./app.js";
 import { createSqliteDatabase } from "./database-sqlite.js";
 import { DiskPhotoStore } from "./photo-store.js";
 import { createProductionApp } from "./production.js";
+import { resolveSessionTtlMs } from "./session.js";
 
 // Node's native loader keeps existing process environment values authoritative.
 for (const filename of [".env.local", ".env"]) {
@@ -18,7 +17,7 @@ for (const filename of [".env.local", ".env"]) {
 const port = Number(process.env.PORT ?? 3001);
 const databasePath = process.env.DATABASE_PATH ?? "./data/civicsignal.db";
 const uploadDirectory = process.env.UPLOAD_DIR ?? "./uploads";
-const sessionTtlDays = Number(process.env.SESSION_TTL_DAYS ?? 14);
+const sessionTtlMs = resolveSessionTtlMs();
 const clientDirectory = path.resolve(
   process.env.CLIENT_DIR ?? path.join("dist", "client"),
 );
@@ -26,29 +25,14 @@ const clientDirectory = path.resolve(
 async function localApp() {
   mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
   const database = await createSqliteDatabase(databasePath);
-  return createApp({ database, photos: new DiskPhotoStore(uploadDirectory), sessionTtlDays });
+  return createApp({ database, photos: new DiskPhotoStore(uploadDirectory), sessionTtlMs });
 }
 
 const { app, close } = process.env.CONNECTION_STRING || process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.DB_PASSWORD
   ? await createProductionApp()
   : await localApp();
 
-app.use(express.static(clientDirectory));
-app.use((request, response, next) => {
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    next();
-    return;
-  }
-  if (request.path.startsWith("/api/") || request.path.startsWith("/uploads/")) {
-    next();
-    return;
-  }
-  response.sendFile(path.join(clientDirectory, "index.html"), (error) => {
-    if (error) {
-      next();
-    }
-  });
-});
+attachClient(app, clientDirectory);
 
 const server = app.listen(port, () => {
   console.log(`CivicSignal server listening on http://localhost:${port}`);

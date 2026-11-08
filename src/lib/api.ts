@@ -25,17 +25,17 @@ async function parseResponse<T>(response: Response, path: string): Promise<T> {
   ) as (T & Partial<ApiErrorBody>) | null;
 
   if (!response.ok) {
+    const error = body?.error;
+    // Only a missing/expired session means the user must sign in again. Other
+    // 401s (a wrong password, for example) must not end the whole session.
     if (
       response.status === 401 &&
+      error?.code === "AUTH_REQUIRED" &&
       typeof window !== "undefined" &&
-      !path.includes("/guest") &&
-      !["/api/auth/login", "/api/auth/register", "/api/auth/session", "/api/setup/status"].includes(
-        path.split("?")[0],
-      )
+      !path.includes("/guest")
     ) {
       window.dispatchEvent(new Event("civicsignal:session-expired"));
     }
-    const error = body?.error;
     const fieldErrors: Record<string, string> = {};
     for (const [field, messages] of Object.entries(error?.fieldErrors ?? {})) {
       fieldErrors[field] = messages[0] ?? "Invalid value.";

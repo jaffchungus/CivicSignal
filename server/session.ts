@@ -19,6 +19,36 @@ declare global {
 
 export const SESSION_COOKIE = "civicsignal_session";
 
+/**
+ * HTTPS deployments use the `__Host-` prefix: browsers reject such a cookie
+ * unless it is Secure, has Path=/, and carries no Domain, so a sibling
+ * subdomain cannot set or overwrite the session. Plain-HTTP development keeps
+ * the unprefixed name because `__Host-` cookies are only stored over HTTPS.
+ */
+const HOST_SESSION_COOKIE = `__Host-${SESSION_COOKIE}`;
+
+export function sessionCookieName(secureCookies: boolean): string {
+  return secureCookies ? HOST_SESSION_COOKIE : SESSION_COOKIE;
+}
+
+/** Sessions last two hours by default, measured absolutely from sign-in. */
+export const DEFAULT_SESSION_TTL_MS = 2 * 60 * 60 * 1_000;
+
+/**
+ * Reads SESSION_TTL_HOURS. A missing, non-numeric, or non-positive value falls
+ * back to the default instead of expiring sessions immediately.
+ */
+export function resolveSessionTtlMs(
+  environment: Record<string, string | undefined> = process.env,
+): number {
+  const configured = environment.SESSION_TTL_HOURS;
+  if (configured === undefined || configured.trim() === "") return DEFAULT_SESSION_TTL_MS;
+  const hours = Number(configured);
+  return Number.isFinite(hours) && hours > 0
+    ? Math.round(hours * 60 * 60 * 1_000)
+    : DEFAULT_SESSION_TTL_MS;
+}
+
 function sessionHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -51,32 +81,62 @@ export async function createSession(
       "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
     )
     .run(sessionHash(token), userId, now, now + sessionDurationMs);
-  response.cookie(SESSION_COOKIE, token, {
+  const cookieName = sessionCookieName(secureCookies);
+  response.cookie(cookieName, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: secureCookies,
     path: "/",
     maxAge: sessionDurationMs,
   });
+  if (cookieName !== SESSION_COOKIE) {
+    // Drop any pre-`__Host-` cookie so a stale duplicate cannot linger after
+    // an upgrade.
+    response.clearCookie(SESSION_COOKIE, { path: "/" });
+  }
+}
+
+/** Ends every session for a user except the one making this request. */
+export async function revokeOtherSessions(
+  database: CivicDatabase,
+  request: Request,
+  userId: string,
+  cookieName: string,
+): Promise<void> {
+  const token = request.cookies?.[cookieName] as string | undefined;
+  if (!token) return;
+  await database
+    .prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?")
+    .run(userId, sessionHash(token));
 }
 
 export async function destroySession(
   database: CivicDatabase,
   request: Request,
   response: Response,
+  secureCookies: boolean,
 ): Promise<void> {
-  const token = request.cookies?.[SESSION_COOKIE] as string | undefined;
+  const cookieName = sessionCookieName(secureCookies);
+  const token = request.cookies?.[cookieName] as string | undefined;
   if (token) {
     await database.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sessionHash(token));
   }
-  response.clearCookie(SESSION_COOKIE, { path: "/" });
+  response.clearCookie(cookieName, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: secureCookies,
+    path: "/",
+  });
+  if (cookieName !== SESSION_COOKIE) {
+    response.clearCookie(SESSION_COOKIE, { path: "/" });
+  }
 }
 
 /** Resolves the session user and rejects unauthenticated or inactive accounts. */
-export function authenticate(database: CivicDatabase): RequestHandler {
+export function authenticate(database: CivicDatabase, cookieName: string): RequestHandler {
   return async (request, _response, next) => {
     try {
-      const token = request.cookies?.[SESSION_COOKIE] as string | undefined;
+      const token = request.cookies?.[cookieName] as string | undefined;
       if (!token) {
         next(new ApiError(401, "AUTH_REQUIRED", "Sign in to continue."));
         return;

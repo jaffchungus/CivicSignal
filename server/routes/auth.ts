@@ -17,6 +17,8 @@ import {
   createSession,
   currentUser,
   destroySession,
+  revokeOtherSessions,
+  sessionCookieName,
   userForSessionToken,
 } from "../session.js";
 import { recordAudit } from "../activity.js";
@@ -57,6 +59,11 @@ const EXPECTED_ORGANIZATION_KIND: Partial<Record<UserRole, OrganizationKind>> = 
   LAW_ENFORCEMENT: "LAW_ENFORCEMENT",
 };
 
+// A throwaway bcrypt hash compared against when no account matches, so sign-in
+// response time does not disclose which email addresses are registered.
+const DUMMY_PASSWORD_HASH =
+  "$2b$12$azE8D3KsY..HcuVS1XJT/.l17KS89kt9QuDC.CWlNHOKtPG4/yOWe";
+
 function normalizedEmail(email: string): string {
   return email.trim().toLocaleLowerCase("en-US");
 }
@@ -67,6 +74,7 @@ export function createAuthRouter(deps: {
   sessionDurationMs: number;
 }): Router {
   const { database, secureCookies, sessionDurationMs } = deps;
+  const sessionCookie = sessionCookieName(secureCookies);
   const router = Router();
 
   router.get("/setup/status", async (_request, response) => {
@@ -142,7 +150,7 @@ export function createAuthRouter(deps: {
   });
 
   router.get("/auth/session", async (request, response) => {
-    const token = request.cookies?.civicsignal_session as string | undefined;
+    const token = request.cookies?.[sessionCookie] as string | undefined;
     const user = token ? await userForSessionToken(database, token) : null;
     response.json({ user });
   });
@@ -244,9 +252,10 @@ export function createAuthRouter(deps: {
         .get(normalizedEmail(input.email))) as
         | { id: string; password_hash: string; status: string }
         | undefined;
-      const passwordMatches = row
-        ? await bcrypt.compare(input.password, row.password_hash)
-        : false;
+      const passwordMatches = await bcrypt.compare(
+        input.password,
+        row?.password_hash ?? DUMMY_PASSWORD_HASH,
+      );
       if (!row || !passwordMatches) {
         sendError(response, 401, "INVALID_CREDENTIALS", "The email or password is incorrect.");
         return;
@@ -269,11 +278,11 @@ export function createAuthRouter(deps: {
   });
 
   router.post("/auth/logout", async (request, response) => {
-    await destroySession(database, request, response);
+    await destroySession(database, request, response, secureCookies);
     response.status(204).end();
   });
 
-  router.patch("/auth/profile", authenticate(database), async (request, response, next) => {
+  router.patch("/auth/profile", authenticate(database, sessionCookie), async (request, response, next) => {
     try {
       const user = currentUser(request);
       const input = profileSchema.parse(request.body);
@@ -295,7 +304,7 @@ export function createAuthRouter(deps: {
     }
   });
 
-  router.patch("/auth/password", authenticate(database), async (request, response, next) => {
+  router.patch("/auth/password", authenticate(database, sessionCookie), async (request, response, next) => {
     try {
       const user = currentUser(request);
       const input = passwordChangeSchema.parse(request.body);
@@ -319,6 +328,8 @@ export function createAuthRouter(deps: {
       await database
         .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
         .run(passwordHash, Date.now(), user.id);
+      // A changed password must invalidate any session an attacker already holds.
+      await revokeOtherSessions(database, request, user.id, sessionCookie);
 
       await recordAudit(database, {
         actorUserId: user.id,

@@ -19,8 +19,9 @@ type NotificationRow = {
 
 export function createNotificationsRouter(deps: {
   database: CivicDatabase;
+  sessionCookie: string;
 }): Router {
-  const { database } = deps;
+  const { database, sessionCookie } = deps;
   const router = Router();
 
   const pushSubscriptionSchema = z.object({
@@ -44,7 +45,7 @@ export function createNotificationsRouter(deps: {
     };
   }
 
-  router.get("/push/config", authenticate(database), async (request, response) => {
+  router.get("/push/config", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const publicKey = await getWebPushPublicKey(database);
     const { deviceCount } = (await database.prepare(
@@ -53,13 +54,17 @@ export function createNotificationsRouter(deps: {
     response.json({ publicKey, deviceCount });
   });
 
-  router.put("/push/subscription", authenticate(database), async (request, response) => {
+  router.put("/push/subscription", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const subscription = pushSubscriptionSchema.parse(request.body);
     if (!isAllowedPushEndpoint(subscription.endpoint)) {
       throw new ApiError(422, "INVALID_PUSH_ENDPOINT", "This browser's push service is not supported.");
     }
 
+    // A push endpoint identifies one browser, not one account: when another
+    // account signs in on the same browser and re-subscribes, ownership moves
+    // to that account. No API returns subscription endpoints, so a user cannot
+    // target another account's subscription.
     const now = Date.now();
     await database.prepare(
       `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
@@ -71,7 +76,7 @@ export function createNotificationsRouter(deps: {
     response.status(204).end();
   });
 
-  router.delete("/push/subscription", authenticate(database), async (request, response) => {
+  router.delete("/push/subscription", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const endpoint = z.string().url().max(2_048).parse(request.body?.endpoint);
     await database.prepare(
@@ -80,7 +85,7 @@ export function createNotificationsRouter(deps: {
     response.status(204).end();
   });
 
-  router.get("/", authenticate(database), async (request, response) => {
+  router.get("/", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const rows = (await database
       .prepare(
@@ -98,7 +103,7 @@ export function createNotificationsRouter(deps: {
     response.json({ notifications: rows.map(serialize), unreadCount });
   });
 
-  router.post("/:notificationId/read", authenticate(database), async (request, response) => {
+  router.post("/:notificationId/read", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     const owned = await database
       .prepare("SELECT id FROM notifications WHERE id = ? AND user_id = ?")
@@ -118,7 +123,7 @@ export function createNotificationsRouter(deps: {
     response.status(204).end();
   });
 
-  router.post("/read-all", authenticate(database), async (request, response) => {
+  router.post("/read-all", authenticate(database, sessionCookie), async (request, response) => {
     const user = currentUser(request);
     await database
       .prepare("UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL")

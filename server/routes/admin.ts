@@ -49,11 +49,14 @@ const EXPECTED_ORGANIZATION_KIND: Partial<Record<UserRole, OrganizationKind>> = 
   LAW_ENFORCEMENT: "LAW_ENFORCEMENT",
 };
 
-export function createAdminRouter(deps: { database: CivicDatabase }): Router {
-  const { database } = deps;
+export function createAdminRouter(deps: {
+  database: CivicDatabase;
+  sessionCookie: string;
+}): Router {
+  const { database, sessionCookie } = deps;
   const router = Router();
 
-  router.use(authenticate(database), requireRole("ADMIN"));
+  router.use(authenticate(database, sessionCookie), requireRole("ADMIN"));
 
   router.get("/overview", async (_request, response) => {
     const count = async (sql: string): Promise<number> =>
