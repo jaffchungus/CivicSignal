@@ -336,20 +336,6 @@ export function ReportCreatePage() {
           </p>
         </div>
 
-        <div className="card ai-card" role="note">
-          <div className="ai-card-header">
-            <span className="ai-badge">AI handles the details</span>
-          </div>
-          <p>
-            There is no title, category, or description to fill in. When you send, AI classifies the photo.
-            The server routes it to that category’s organization and assigns the nearest verified staff member,
-            preferring someone in the report’s municipality and otherwise the closest person available.
-          </p>
-          <p className="muted">
-            If AI cannot identify a civic issue from the photo, the report is not sent and you can try a clearer photo.
-          </p>
-        </div>
-
         {(formError || error) && <p className="error" role="alert">{formError || error}</p>}
         <div className="button-row">
           <button className="button primary" type="submit" disabled={!canSubmit}>
