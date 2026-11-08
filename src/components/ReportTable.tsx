@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 
 import { formatDate } from "../lib/format";
 import type { Report } from "../../shared/contracts";
+import { PriorityBadge } from "./PriorityBadge";
 import { StatusBadge } from "./StatusBadge";
 
 export function ReportTable({ reports }: { reports: Report[] }) {
@@ -26,6 +27,7 @@ export function ReportTable({ reports }: { reports: Report[] }) {
             </div>
             <div className="report-row-meta">
               <div className="report-row-badges">
+                <PriorityBadge priority={report.priority} />
                 <StatusBadge status={report.status} />
                 {report.followUpNeeded && <span className="attention-chip">Resident follow-up</span>}
               </div>

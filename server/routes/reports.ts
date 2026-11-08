@@ -14,6 +14,7 @@ import {
   type ModerationStatus,
   MAX_REPORT_PHOTO_BYTES,
   type OrganizationKind,
+  type ReportPriority,
   type ReportStatus,
   type UserRole,
 } from "../../shared/contracts.js";
@@ -27,6 +28,7 @@ import {
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
 import { assignNearestStaff, findNearestMunicipality, routeReportToOrganization } from "../jurisdiction.js";
+import { loadReportPriorities, reportPriorityRank } from "../report-priority.js";
 import { detectProblemInPhoto, type PhotoAnalyzer } from "../ai-photo-analyzer.js";
 import {
   findSimilarReports,
@@ -297,7 +299,7 @@ function assertCanManage(
   }
 }
 
-function serializeSummary(row: ReportRow) {
+function serializeSummary(row: ReportRow, priority?: ReportPriority | null) {
   const followUpNeeded =
     (row.status === "RESOLVED" || row.status === "CLOSED") &&
     (row.reporter_confirmation === "STILL_HAPPENING" || row.reporter_confirmation === "DONT_KNOW");
@@ -368,6 +370,7 @@ function serializeSummary(row: ReportRow) {
           url: `/api/reports/${row.id}/attachments/${row.first_attachment_id}`,
         }]
       : [],
+    ...(priority ? { priority } : {}),
     similarReportId: row.similar_report_id ?? null,
     similarityScore: row.similarity_score ?? null,
   };
@@ -446,8 +449,13 @@ async function serializeDetail(
     relatedReportCount = persistenceCheck.relatedReportCount;
   }
 
+  const canViewPriority = isStaffRole(user.role) || user.role === "ADMIN";
+  const priority = canViewPriority
+    ? (await loadReportPriorities(database, new Set([row.id]))).get(row.id) ?? null
+    : null;
+
   return {
-    ...serializeSummary(row),
+    ...serializeSummary(row, priority),
     attachments: attachments.map((attachment) => ({
       id: attachment.id,
       filename: attachment.filename,
@@ -1055,10 +1063,20 @@ export function createReportsRouter(deps: {
       .prepare(`SELECT COUNT(*) AS total FROM reports ${where}`)
       .get(...parameters)) as { total: number };
 
-    response.json({
-      reports: rows.map((row) => serializeSummary(row)),
-      total,
-    });
+    const canViewPriority = isStaffRole(user.role) || user.role === "ADMIN";
+    const priorities = canViewPriority
+      ? await loadReportPriorities(database, new Set(rows.map((row) => row.id)))
+      : null;
+    const reports = rows.map((row) => serializeSummary(row, priorities?.get(row.id)));
+    // Keep the official work queue focused on corroborated problems first. The
+    // database order remains the stable tie-breaker within each priority level.
+    if (scope === "queue") {
+      reports.sort((left, right) =>
+        reportPriorityRank(right.priority?.level) - reportPriorityRank(left.priority?.level),
+      );
+    }
+
+    response.json({ reports, total });
   });
 
   router.get("/impact", authenticate(database, sessionCookie), requireStaff(), async (request, response) => {

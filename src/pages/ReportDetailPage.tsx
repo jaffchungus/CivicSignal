@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Field } from "../components/Field";
+import { PriorityBadge } from "../components/PriorityBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { formatDateTime } from "../lib/format";
@@ -9,6 +10,7 @@ import { useAction, useFetch } from "../lib/hooks";
 import { reportGuidance } from "../lib/report-guidance";
 import { useAuth } from "../lib/auth";
 import {
+  REPORT_PRIORITY_LABELS,
   reportStatusLabel,
   type Report,
   type ReportStatus,
@@ -205,7 +207,10 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
               {report.location}
             </p>
           </div>
-          <StatusBadge status={report.status} />
+          <div className="detail-badges">
+            <PriorityBadge priority={report.priority} />
+            <StatusBadge status={report.status} />
+          </div>
         </div>
 
         <section className="incident-location" aria-label="Incident location">
@@ -250,6 +255,22 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
         </dl>
 
         <p className="routing-disclosure"><strong>How this was routed:</strong> {routingText}{routing?.reviewRequired ? " Staff should review the category." : ""}</p>
+
+        {report.priority && (
+          <section
+            className={`priority-summary priority-summary-${report.priority.level.toLowerCase()}`}
+            aria-label="Work priority basis"
+          >
+            <strong>{REPORT_PRIORITY_LABELS[report.priority.level]} priority</strong>
+            <p>
+              {report.priority.reportCount === 1
+                ? `This is the only active report in this category within ${report.priority.radiusMeters} m.`
+                : `${report.priority.reportCount} active reports from ${report.priority.reporterCount} ${report.priority.reporterCount === 1 ? "person" : "people"} are in this category within ${report.priority.radiusMeters} m.`}{" "}
+              Priority rises when more people independently report the same nearby issue. It is a
+              workload signal, not a verified duplicate or an emergency rating.
+            </p>
+          </section>
+        )}
 
         <h2>What was reported</h2>
         <p className="description">{report.description || "No additional details were provided."}</p>

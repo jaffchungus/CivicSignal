@@ -48,6 +48,24 @@ export const REPORT_STATUS_LABELS: Record<ReportStatus, string> = {
   CLOSED: "Closed",
 };
 
+export const REPORT_PRIORITY_LEVELS = ["STANDARD", "ELEVATED", "HIGH"] as const;
+export type ReportPriorityLevel = (typeof REPORT_PRIORITY_LEVELS)[number];
+
+export const REPORT_PRIORITY_LABELS: Record<ReportPriorityLevel, string> = {
+  STANDARD: "Standard",
+  ELEVATED: "Elevated",
+  HIGH: "High",
+};
+
+/** Staff-facing workload signal derived from nearby, independently reported issues. */
+export type ReportPriority = {
+  level: ReportPriorityLevel;
+  reportCount: number;
+  reporterCount: number;
+  radiusMeters: number;
+  windowDays: number;
+};
+
 export function reportStatusLabel(status: string): string {
   return REPORT_STATUS_LABELS[status as ReportStatus] ?? status;
 }
@@ -176,6 +194,7 @@ export type Report = {
   capabilities?: Record<string, boolean>;
   isPersistentProblem?: boolean;
   relatedReportCount?: number;
+  priority?: ReportPriority | null;
   similarReportId?: string | null;
   similarityScore?: number | null;
 };
