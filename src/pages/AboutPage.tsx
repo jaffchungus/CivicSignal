@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 export function AboutPage() {
   return (
     <article className="card legal-page">
-      <p className="eyebrow">Project overview · 2026 Congressional App Challenge, NJ-05</p>
+      <p className="eyebrow">Project overview</p>
       <h1>About this civic app</h1>
       <p className="muted">
         This civic app helps solve community issues by making it easy to report non-emergency problems. A resident can submit a report to an organization configured for the selected category, then view the status and updates recorded in the app.
@@ -14,23 +14,27 @@ export function AboutPage() {
         The intended users are residents of a community whose deployment has configured receiving organizations, and the authorized staff who record report updates. The application does not identify a resident’s municipality or determine which agency has jurisdiction.
       </p>
 
-      <h2>Competition and service area</h2>
+      <h2>Service area and scope</h2>
       <p>
-        The NJ-05 label is the Congressional App Challenge district, not a claim that CivicSignal serves every town in that district. NJ-05 includes parts of Bergen, Passaic, and Sussex Counties. This app does not check congressional-district or municipal boundaries; any service area depends on the organizations configured by a deployment operator.
+        CivicSignal does not check municipal, county, or congressional-district boundaries. Any service area depends on
+        the organizations and categories configured by the deployment operator. A report goes only to the configured
+        organization connected to the category the resident chooses.
       </p>
 
       <h2>How it works</h2>
       <ul>
         <li><strong>Choose:</strong> The resident selects an active category. A deployment administrator has already connected that category to a receiving organization.</li>
-        <li><strong>Submit:</strong> The current form requires a photo, location, and category. A guest can submit without creating an account and receives a private link to save.</li>
+        <li><strong>Submit:</strong> The form requires a title, description, location, and category. A photo is optional. A guest can submit without creating an account and receives a private link to save.</li>
         <li><strong>Follow the history:</strong> Residents see the report status, recorded timeline, and updates entered by authorized accounts. Each event shows who acted and when.</li>
         <li><strong>Get alerted:</strong> Account holders can opt in to phone or computer notifications for report activity on supported browsers.</li>
         <li><strong>Understand the record:</strong> A status such as “Resolved” reflects what staff recorded in CivicSignal. It is not an independent inspection or proof that a public agency completed work.</li>
       </ul>
 
-      <h2>Automatic AI description</h2>
+      <h2>Optional AI suggestions</h2>
       <p>
-        When the deployment has configured Gemini photo analysis, the app automatically generates a description when a photo is selected. The AI also detects and blocks spam images. If photo analysis is unavailable, report details can be entered manually.
+        When the deployment has configured Gemini photo analysis, choosing a photo can produce an editable category,
+        title, and description suggestion. The resident can change every field or ignore the suggestion. The AI is not
+        required: reports can be submitted with text only, and the resident always chooses the final category.
       </p>
 
       <p>

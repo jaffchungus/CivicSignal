@@ -61,7 +61,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
     <section className="landing">
       <div className="landing-hero">
         <div className="landing-copy">
-          <p className="eyebrow">Congressional App Challenge Participant</p>
+          <p className="eyebrow">Non-emergency community reporting</p>
           <h1>Report a local issue. Follow its updates.</h1>
           <p className="landing-lede">
             Send a non-emergency report to an organization configured for this community. Come back here to see any updates its staff record.
@@ -95,7 +95,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
             <span className="landing-step-number">02</span>
             <div>
               <h3>Send the details</h3>
-              <p>Submit a required photo and description, plus location. If enabled, an AI suggestion can help draft the description for you to review.</p>
+              <p>Add a description and location, with an optional photo. If enabled, an AI suggestion can help draft the category and description for you to review.</p>
             </div>
           </li>
           <li>

@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import L from "leaflet";
-import type { Report } from "../../shared/contracts";
+import { reportStatusLabel, type Report } from "../../shared/contracts";
 
 interface ReportMapProps {
   reports: Report[];
   center?: { lat: number; lng: number };
   zoom?: number;
-  onReportClick?: (report: Report) => void;
   filters?: {
     status?: string[];
     category?: string[];
@@ -17,27 +16,59 @@ interface ReportMapProps {
 
 // Status colors for map markers
 const STATUS_COLORS: Record<string, string> = {
-  SUBMITTED: "#ff6b6b",
-  UNDER_REVIEW: "#ffd93d",
-  IN_PROGRESS: "#6bcf7f",
-  RESOLVED: "#4d96ff",
-  CLOSED: "#8b8b8b",
+  SUBMITTED: "#385575",
+  UNDER_REVIEW: "#79520f",
+  IN_PROGRESS: "#285e7e",
+  RESOLVED: "#246147",
+  CLOSED: "#526057",
 };
 
 // Persistent problem indicator color
-const PERSISTENT_COLOR = "#ff4757";
+const PERSISTENT_COLOR = "#a3312c";
+
+function mapElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  text?: string,
+  className?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function clusterPopup(item: {
+  count: number;
+  reports: Report[];
+}): HTMLElement {
+  const root = mapElement("div", undefined, "map-popup cluster-popup");
+  root.append(mapElement("h3", `${item.count} reports in this area`));
+  const summary = item.reports.reduce<Record<string, number>>((counts, report) => {
+    counts[report.status] = (counts[report.status] || 0) + 1;
+    return counts;
+  }, {});
+  for (const [status, count] of Object.entries(summary)) {
+    const line = mapElement("p");
+    const dot = mapElement("span", undefined, "status-dot");
+    dot.style.background = STATUS_COLORS[status] ?? "#526057";
+    line.append(dot, document.createTextNode(`${reportStatusLabel(status as Report["status"])}: ${count}`));
+    root.append(line);
+  }
+  root.append(mapElement("p", "Select the cluster to zoom in.", "muted"));
+  return root;
+}
 
 // Cluster configuration
 const CLUSTER_RADIUS_PX = 60;
 const CLUSTER_MAX_ZOOM = 16;
 
-export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }: ReportMapProps) {
-  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+export function ReportMap({ reports, center, zoom = 13, filters }: ReportMapProps) {
   const [hoveredReport, setHoveredReport] = useState<Report | null>(null);
   const [currentZoom, setCurrentZoom] = useState(zoom);
   const [showLegend, setShowLegend] = useState(true);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
+  const [locationMessage, setLocationMessage] = useState("");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.Layer[]>([]);
@@ -123,10 +154,11 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
   // Get user location
   const getUserLocation = useCallback(() => {
     if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser");
+      setLocationMessage("This browser cannot share a location.");
       return;
     }
 
+    setLocationMessage("");
     setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
@@ -141,7 +173,11 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
       },
       (error) => {
         console.error("Geolocation error:", error);
-        alert("Unable to retrieve your location");
+        setLocationMessage(
+          error.code === error.PERMISSION_DENIED
+            ? "Location permission is blocked. Allow it in browser settings to show your position."
+            : "Your location could not be read. Try again or use the report page to enter an address.",
+        );
         setIsLocating(false);
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -218,24 +254,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           map.setView([item.lat, item.lng], map.getZoom() + 2);
         });
 
-        // Add popup with summary
-        const statusSummary = item.reports.reduce((acc, r) => {
-          acc[r.status] = (acc[r.status] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>);
-
-        const popupContent = `
-          <div class="map-popup cluster-popup">
-            <h3>${item.count} reports in this area</h3>
-            ${Object.entries(statusSummary).map(([status, count]) => `
-              <p><span class="status-dot" style="background: ${STATUS_COLORS[status]}"></span>
-              ${status}: ${count}</p>
-            `).join("")}
-            <p class="muted">Click to zoom in</p>
-          </div>
-        `;
-
-        marker.bindPopup(popupContent);
+        marker.bindPopup(clusterPopup(item));
         markersRef.current.push(marker);
       } else {
         // Create individual report marker
@@ -243,17 +262,20 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         const statusColor = STATUS_COLORS[report.status] || "#ff6b6b";
         const isPersistent = report.isPersistentProblem;
 
+        const reportHref = `/reports/${report.id}`;
         const markerIcon = L.divIcon({
           className: "report-marker-icon",
           html: `
-            <div class="report-marker-wrapper ${isPersistent ? 'persistent-problem' : ''}" style="border-color: ${statusColor}">
-              ${report.attachments && report.attachments.length > 0
-                ? `<img src="/api/reports/${report.id}/attachments/${report.attachments[0].id}" class="marker-image" />`
-                : `<div class="marker-placeholder"></div>`
-              }
-              <div class="marker-status" style="background: ${statusColor}"></div>
-              ${isPersistent ? `<div class="persistent-badge">!</div>` : ''}
-            </div>
+            <a class="report-marker-link" href="${reportHref}" target="_blank" rel="noopener noreferrer" aria-label="Open this report in a new tab">
+              <div class="report-marker-wrapper ${isPersistent ? 'persistent-problem' : ''}" style="border-color: ${statusColor}">
+                ${report.attachments && report.attachments.length > 0
+                  ? `<img src="/api/reports/${report.id}/attachments/${report.attachments[0].id}" alt="" class="marker-image" />`
+                  : `<div class="marker-placeholder"></div>`
+                }
+                <div class="marker-status" style="background: ${statusColor}"></div>
+                ${isPersistent ? `<div class="persistent-badge">!</div>` : ''}
+              </div>
+            </a>
           `,
           iconSize: [48, 48],
           iconAnchor: [24, 48],
@@ -261,44 +283,12 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
 
         const marker = L.marker(
           [report.coordinates!.latitude, report.coordinates!.longitude],
-          { icon: markerIcon }
+          { icon: markerIcon, keyboard: false, title: "Open report in a new tab" }
         ).addTo(map);
 
-        // Add popup with report details
-        const popupContent = `
-          <div class="map-popup">
-            <h3>${report.title}</h3>
-            ${isPersistent ? `<p class="persistent-warning">Persistent problem (${report.relatedReportCount || 0} related reports)</p>` : ''}
-            <p><strong>Status:</strong> <span class="status-badge" style="background: ${statusColor}">${report.status}</span></p>
-            <p><strong>Location:</strong> ${report.location}</p>
-            <p><strong>Submitted:</strong> ${new Date(report.submittedAt).toLocaleDateString()}</p>
-            ${report.reporter ? `<p><strong>Reporter:</strong> ${report.reporter.displayName}</p>` : ""}
-            ${report.category ? `<p><strong>Category:</strong> ${report.category.name}</p>` : ""}
-            ${report.municipality ? `<p><strong>Municipality:</strong> ${report.municipality.name}</p>` : ""}
-            <a href="/reports/${report.id}" target="_blank" class="view-link">View full report</a>
-          </div>
-        `;
-
-        marker.bindPopup(popupContent);
-
-        // Hover effect
-        marker.on("mouseover", () => {
-          setHoveredReport(report);
-          marker.openPopup();
-        });
-
-        marker.on("mouseout", () => {
-          setHoveredReport(null);
-          marker.closePopup();
-        });
-
-        // Click to select
-        marker.on("click", () => {
-          setSelectedReport(report);
-          if (onReportClick) {
-            onReportClick(report);
-          }
-        });
+        // Hovering previews the report; clicking its image opens the report tab.
+        marker.on("mouseover", () => setHoveredReport(report));
+        marker.on("mouseout", () => setHoveredReport(null));
 
         markersRef.current.push(marker);
       }
@@ -322,7 +312,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
       userLocationMarkerRef.current.remove();
       userLocationMarkerRef.current = null;
     }
-  }, [clusteredReports, userLocation, onReportClick]);
+  }, [clusteredReports, userLocation]);
 
   return (
     <div className="map-container">
@@ -383,6 +373,10 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         </div>
       )}
 
+      {locationMessage && (
+        <p className="map-location-message" role="status">{locationMessage}</p>
+      )}
+
       {/* Stats panel */}
       <div className="map-stats">
         <h4>Showing {filteredReports.length} report{filteredReports.length !== 1 ? "s" : ""}</h4>
@@ -398,57 +392,6 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
           <p>{hoveredReport.location}</p>
           <p>Status: <span className="status-badge" style={{ background: STATUS_COLORS[hoveredReport.status] }}>{hoveredReport.status}</span></p>
           {hoveredReport.municipality && <p>Municipality: {hoveredReport.municipality.name}</p>}
-        </div>
-      )}
-
-      {/* Selected report details */}
-      {selectedReport && (
-        <div className="map-details-panel">
-          <button
-            className="close-button"
-            onClick={() => setSelectedReport(null)}
-            aria-label="Close details"
-          >
-            ×
-          </button>
-          <h3>{selectedReport.title}</h3>
-          {selectedReport.attachments && selectedReport.attachments.length > 0 && (
-            <img
-              src={`/api/reports/${selectedReport.id}/attachments/${selectedReport.attachments[0].id}`}
-              alt={selectedReport.title}
-              className="report-image"
-            />
-          )}
-          <div className="report-meta">
-            {selectedReport.isPersistentProblem && (
-              <div className="persistent-problem-alert">
-                <strong>Persistent Problem</strong>
-                <p className="muted">This issue has been reported {selectedReport.relatedReportCount || 0} times by different residents at this location.</p>
-              </div>
-            )}
-            <p><strong>Status:</strong> <span className="status-badge" style={{ background: STATUS_COLORS[selectedReport.status] }}>{selectedReport.status}</span></p>
-            <p><strong>Description:</strong> {selectedReport.description}</p>
-            <p><strong>Location:</strong> {selectedReport.location}</p>
-            <p><strong>Submitted:</strong> {new Date(selectedReport.submittedAt).toLocaleString()}</p>
-            {selectedReport.reporter && (
-              <p><strong>Reporter:</strong> {selectedReport.reporter.displayName}</p>
-            )}
-            {selectedReport.category && (
-              <p><strong>Category:</strong> {selectedReport.category.name}</p>
-            )}
-            {selectedReport.organization && (
-              <p><strong>Organization:</strong> {selectedReport.organization.name}</p>
-            )}
-            {selectedReport.municipality && (
-              <p><strong>Municipality:</strong> {selectedReport.municipality.name}</p>
-            )}
-            {selectedReport.reporterConfirmation && (
-              <p><strong>Reporter Confirmation:</strong> {selectedReport.reporterConfirmation.replace(/_/g, " ")}</p>
-            )}
-          </div>
-          <a href={`/reports/${selectedReport.id}`} className="button primary">
-            View full report
-          </a>
         </div>
       )}
 
@@ -495,23 +438,39 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
         }
 
         .map-control-button {
-          background: white;
-          border: 1px solid #d0d7de;
+          min-height: 44px;
+          background: #fff;
+          border: 1px solid #cbd7d0;
           border-radius: 6px;
           padding: 8px 16px;
           cursor: pointer;
           font-size: 13px;
-          font-weight: 500;
-          color: #24292f;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-          transition: all 0.15s ease;
+          font-weight: 650;
+          color: #292d28;
+          box-shadow: 0 1px 3px rgba(35,38,31,0.08);
+          transition: border-color 120ms ease, background-color 120ms ease;
           white-space: nowrap;
         }
 
+        .map-location-message {
+          position: absolute;
+          top: 10px;
+          left: 10px;
+          max-width: min(320px, calc(100% - 150px));
+          margin: 0;
+          padding: 8px 12px;
+          border: 1px solid #dfc58f;
+          border-radius: 6px;
+          background: #fbf1dc;
+          color: #553b12;
+          font-size: 13px;
+          z-index: 1000;
+        }
+
         .map-control-button:hover:not(:disabled) {
-          background: #f6f8fa;
-          border-color: #babbbd;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+          background: #f1f6f2;
+          border-color: #416b58;
+          box-shadow: 0 1px 3px rgba(35,38,31,0.12);
         }
 
         .map-control-button:active:not(:disabled) {
@@ -602,6 +561,19 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
 
         .report-marker-icon {
           background: transparent;
+        }
+
+        .report-marker-link {
+          display: block;
+          width: 48px;
+          height: 48px;
+          border-radius: 50%;
+          text-decoration: none;
+        }
+
+        .report-marker-link:focus-visible {
+          outline: 3px solid #1f4d3a;
+          outline-offset: 3px;
         }
 
         .report-marker-wrapper {

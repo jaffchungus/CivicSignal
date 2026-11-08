@@ -17,9 +17,18 @@ export function ReportTable({ reports }: { reports: Report[] }) {
                 <span>{report.location}</span>
                 <span>{report.category.name} · {report.organization?.name ?? "Organization unavailable"}</span>
               </span>
+              <span className="report-row-extra">
+                {report.assignedTo
+                  ? `Assigned to ${report.assignedTo.displayName}`
+                  : "Unassigned — no staff member has taken ownership"}
+                {report.latestUpdate ? ` · Latest update: ${report.latestUpdate.message}` : " · No official updates yet"}
+              </span>
             </div>
             <div className="report-row-meta">
-              <StatusBadge status={report.status} />
+              <div className="report-row-badges">
+                <StatusBadge status={report.status} />
+                {report.followUpNeeded && <span className="attention-chip">Resident follow-up</span>}
+              </div>
               <span className="muted">Updated {formatDate(report.updatedAt)}</span>
             </div>
           </Link>

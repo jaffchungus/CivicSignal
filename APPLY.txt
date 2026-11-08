@@ -1,0 +1,21 @@
+CivicSignal update - commit 045c70f
+
+This ZIP contains the complete tracked project after the update, plus the
+changes-only Git patch.
+
+Use the complete source:
+  Extract this ZIP into a clean folder, then run your normal install/build
+  steps. node_modules is intentionally not included.
+
+Use the patch on an existing checkout:
+  git apply --check civicsignal-changes.patch
+  git apply civicsignal-changes.patch
+
+  Or apply the commit metadata too:
+  git am civicsignal-changes.patch
+
+Database cleanup:
+  artifacts/clear-all-reports.sql
+
+The patch and full source are based on commit:
+  5b740b2 Import cloud project files

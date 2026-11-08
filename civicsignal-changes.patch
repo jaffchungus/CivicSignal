@@ -1,0 +1,4128 @@
+From 045c70f0260f10539d61bbaafacd3f0f3d860821 Mon Sep 17 00:00:00 2001
+From: Codebuff <noreply@codebuff.com>
+Date: Sun, 8 Nov 2026 14:33:52 +0000
+Subject: [PATCH] Complete the report lifecycle and make the map the default
+ view
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add verified routing, ownership transfers, resident follow-up, accessible report workflows, and map marker links that open reports in a new tab. Fix OpenStreetMap tile loading by sending the origin referrer.
+
+Generated with Codebuff 🤖
+Co-Authored-By: Codebuff <noreply@codebuff.com>
+---
+ README.md                           |   2 +-
+ artifacts/clear-all-reports.sql     |  49 +++
+ docs/REAL-WORLD-READINESS.md        |   2 +-
+ server/app.ts                       |   4 +
+ server/database-postgres.ts         |   6 +
+ server/database-sqlite.ts           |  12 +
+ server/jurisdiction.ts              | 278 ++---------------
+ server/municipality-fallback.ts     | 143 ---------
+ server/routes/reports.ts            | 436 ++++++++++++++++++--------
+ shared/contracts.ts                 |  18 +-
+ src/App.tsx                         |   6 +-
+ src/components/Layout.tsx           |  17 +-
+ src/components/ReportMap.tsx        | 242 +++++++--------
+ src/components/ReportTable.tsx      |  11 +-
+ src/lib/report-guidance.ts          |   4 +-
+ src/pages/AboutPage.tsx             |  16 +-
+ src/pages/AdminPage.tsx             |  12 +
+ src/pages/HomePage.tsx              | 271 +++++++++++-----
+ src/pages/LandingPage.tsx           |   4 +-
+ src/pages/MapPage.tsx               |  60 ++--
+ src/pages/ReportCreatePage.tsx      | 464 +++++++++++++++++++---------
+ src/pages/ReportDetailPage.tsx      | 191 ++++++++----
+ src/pages/SignInPage.tsx            |   2 +
+ src/pages/TrustPages.tsx            |   4 +-
+ src/styles.css                      | 330 +++++++++++++++++++-
+ tests/api/guest-reports.api.test.ts |  61 +++-
+ tests/api/reports.api.test.ts       |  61 ++--
+ tests/api/staff-handoff.api.test.ts |  89 ++++++
+ 28 files changed, 1757 insertions(+), 1038 deletions(-)
+ create mode 100644 artifacts/clear-all-reports.sql
+ delete mode 100644 server/municipality-fallback.ts
+
+diff --git a/README.md b/README.md
+index c092e76..7c34c7c 100644
+--- a/README.md
++++ b/README.md
+@@ -36,7 +36,7 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
+ | `DATABASE_PATH` | SQLite file for local development (default `./data/civicsignal.db`). |
+ | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
+ | `SESSION_TTL_DAYS` | Local session expiry in days (local entry defaults to 14). |
+-| `GEMINI_API_KEY` | Server-only Google Gemini API key. When configured, selecting a photo automatically asks Gemini 3 Flash Preview to classify the issue and choose an administrator-configured category, which determines the receiving organization. Photo classification is required to submit a report. Never use a `VITE_` or `NEXT_PUBLIC_` prefix; the deployment operator must verify the audience and API use meet Google's current terms. |
++| `GEMINI_API_KEY` | Server-only Google Gemini API key. When configured, selecting a photo asks Gemini 3 Flash Preview for an editable category, title, and description suggestion. The resident always chooses the final active category, which determines the receiving organization. Photos and AI classification are optional; text-only reports are accepted. Never use a `VITE_` or `NEXT_PUBLIC_` prefix; the deployment operator must verify the audience and API use meet Google's current terms. |
+ | `DISABLE_GEMINI_PHOTO_ANALYSIS` | Optional emergency switch. Set to `true` to disable classification even when `GEMINI_API_KEY` is configured; report submission is unavailable while classification is disabled. |
+ | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |
+ | `DB_PASSWORD` | Alternative for the configured Supabase database host; the server builds a TLS-enabled Postgres URL. |
+diff --git a/artifacts/clear-all-reports.sql b/artifacts/clear-all-reports.sql
+new file mode 100644
+index 0000000..f95046b
+--- /dev/null
++++ b/artifacts/clear-all-reports.sql
+@@ -0,0 +1,49 @@
++-- CivicSignal: clear all reports and report history
++--
++-- Keeps: users, sessions, organizations, categories, municipalities,
++-- settings (other than the report counter), push subscriptions, and
++-- audit entries that are not tied to reports.
++--
++-- Works with the application's SQLite and PostgreSQL schemas.
++--
++-- IMPORTANT:
++-- 1. Back up the application database before running this.
++-- 2. This removes database rows only. Local files in uploads/, external
++--    Vercel Blob objects, and files in Supabase storage are not removed by SQL.
++-- 3. The audit_events delete below is limited to report history. To clear
++--    every audit entry, including account and organization history, uncomment
++--    the final optional delete before COMMIT.
++
++BEGIN;
++
++-- Report-related notifications must be removed before their reports.
++DELETE FROM notifications
++WHERE report_id IS NOT NULL;
++
++-- Report-scoped audit records.
++DELETE FROM audit_events
++WHERE target_type = 'REPORT';
++
++-- Report history and attachments.
++DELETE FROM report_events;
++DELETE FROM report_updates;
++DELETE FROM attachments;
++DELETE FROM guest_report_access;
++
++-- The reports themselves.
++DELETE FROM reports;
++
++-- Photos stored inside the database. This also removes orphaned photo blobs
++-- left by failed submissions.
++DELETE FROM report_photos;
++
++-- Start numbering again at CS-<current year>-0001. If this row does not
++-- exist, CivicSignal reseeds it from the now-empty reports table.
++UPDATE settings
++SET value = '0'
++WHERE key = 'report_reference_counter';
++
++-- Optional: remove every audit entry, including non-report account history.
++-- DELETE FROM audit_events;
++
++COMMIT;
+diff --git a/docs/REAL-WORLD-READINESS.md b/docs/REAL-WORLD-READINESS.md
+index 6694664..8e1fe63 100644
+--- a/docs/REAL-WORLD-READINESS.md
++++ b/docs/REAL-WORLD-READINESS.md
+@@ -26,7 +26,7 @@ When a resident submits a report, CivicSignal records the category, receiving or
+ | Community impact metrics | Verified staff can see organization-scoped report counts, median time to first staff review, median age of open reports, exact normalized category/location repeat groups, and still-happening confirmations. No public metrics or municipality/category breakdown is exposed. | Review the definitions, time range, source, and submitted-versus-verified distinction before sharing or adding any public aggregate. |
+ | Automated retention and resident deletion | Unavailable. Guest access expires after 90 days; report records, photos, and account records have no automated deletion schedule. | Set an operator-approved retention schedule and implement deletion/archival behavior across both database adapters and photo storage. |
+ 
+-The adapter contract in `server/jurisdiction.ts` is a typed seam only. No geocoder, boundary dataset, staff schedule, email/text sender, or municipal integration is bundled or claimed as operational. Gemini photo classification becomes available when a server key is configured, unless the disable switch is set; the public routing-readiness API and report form identify when it is unavailable. Classification is required for report submission, and the selected category's administrator-configured organization receives the report.
++The adapter contract in `server/jurisdiction.ts` is a typed seam only. No geocoder, boundary dataset, staff schedule, email/text sender, or municipal integration is bundled or claimed as operational. Gemini photo classification becomes available when a server key is configured, unless the disable switch is set; the public routing-readiness API and report form identify when it is unavailable. Classification is optional: residents can submit a text-only report and always choose the final active category. The selected category's administrator-configured organization receives the report; there is no nearest-organization or nearest-representative fallback.
+ 
+ ## Privacy and safety checks before launch
+ 
+diff --git a/server/app.ts b/server/app.ts
+index a73c78f..20ad311 100644
+--- a/server/app.ts
++++ b/server/app.ts
+@@ -58,6 +58,10 @@ export function createApp(options: AppOptions) {
+           connectSrc: ["'self'"],
+         },
+       },
++      // OpenStreetMap's volunteer tile servers require a referrer. Sending
++      // only the origin cross-site keeps report URLs private while letting the
++      // map load tiles.
++      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+     }),
+   );
+   app.use(compression());
+diff --git a/server/database-postgres.ts b/server/database-postgres.ts
+index 51853c9..ed1a02c 100644
+--- a/server/database-postgres.ts
++++ b/server/database-postgres.ts
+@@ -95,6 +95,9 @@ const POSTGRES_SCHEMA = `
+       image_embedding BYTEA,
+       similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+       similarity_score DOUBLE PRECISION,
++      routing_source TEXT NOT NULL DEFAULT 'LEGACY',
++      routing_confidence DOUBLE PRECISION,
++      routing_review_required INTEGER NOT NULL DEFAULT 0,
+       created_at BIGINT NOT NULL,
+       updated_at BIGINT NOT NULL
+     );
+@@ -277,6 +280,9 @@ export async function createPostgresDatabase(connectionString: string): Promise<
+     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS image_embedding BYTEA");
+     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL");
+     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS similarity_score DOUBLE PRECISION");
++    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS routing_source TEXT NOT NULL DEFAULT 'LEGACY'");
++    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS routing_confidence DOUBLE PRECISION");
++    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS routing_review_required INTEGER NOT NULL DEFAULT 0");
+     await initializationClient.query("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
+     await initializationClient.query("ALTER TABLE reports ALTER COLUMN reporter_user_id DROP NOT NULL");
+     await initializationClient.query(DATA_API_PROTECTION);
+diff --git a/server/database-sqlite.ts b/server/database-sqlite.ts
+index c7f593d..49538bc 100644
+--- a/server/database-sqlite.ts
++++ b/server/database-sqlite.ts
+@@ -95,6 +95,9 @@ const SQLITE_SCHEMA = `
+       image_embedding BLOB,
+       similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+       similarity_score REAL,
++      routing_source TEXT NOT NULL DEFAULT 'LEGACY',
++      routing_confidence REAL,
++      routing_review_required INTEGER NOT NULL DEFAULT 0,
+       created_at INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL
+     );
+@@ -257,6 +260,15 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
+     if (!reportTableColumns.some((column) => column.name === "similarity_score")) {
+       database.exec("ALTER TABLE reports ADD COLUMN similarity_score REAL");
+     }
++    if (!reportTableColumns.some((column) => column.name === "routing_source")) {
++      database.exec("ALTER TABLE reports ADD COLUMN routing_source TEXT NOT NULL DEFAULT 'LEGACY'");
++    }
++    if (!reportTableColumns.some((column) => column.name === "routing_confidence")) {
++      database.exec("ALTER TABLE reports ADD COLUMN routing_confidence REAL");
++    }
++    if (!reportTableColumns.some((column) => column.name === "routing_review_required")) {
++      database.exec("ALTER TABLE reports ADD COLUMN routing_review_required INTEGER NOT NULL DEFAULT 0");
++    }
+ 
+     // Add municipalities table if it doesn't exist
+     const tableList = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='municipalities'").get() as { name: string } | undefined;
+diff --git a/server/jurisdiction.ts b/server/jurisdiction.ts
+index 5683cf3..87ea6f8 100644
+--- a/server/jurisdiction.ts
++++ b/server/jurisdiction.ts
+@@ -34,259 +34,44 @@ export function extractCoordinates(location: string): Coordinates | null {
+   return { latitude, longitude };
+ }
+ 
+-export type MunicipalRepresentativeInfo = {
+-  id: string;
+-  displayName: string;
+-  role: "OFFICIAL" | "LAW_ENFORCEMENT";
+-  organizationId: string;
+-  organizationName: string;
+-  municipalityName: string;
+-};
+-
+ export type CategoryRoutingResult = {
+   categoryId: string;
+   organizationId: string;
+   organizationName: string;
+   municipalityId: string | null;
+   municipalityName: string | null;
+-  routingMethod: "municipality_match" | "nearest_organization" | "category_default";
++  routingMethod: "category_default";
+ };
+ 
+ /**
+- * Deterministically resolves the nearest municipal representative for a given
+- * organization and location using code (no AI).
+- */
+-export async function resolveMunicipalityRepresentative(
+-  database: CivicDatabase,
+-  organizationId: string,
+-  _location?: string,
+-): Promise<MunicipalRepresentativeInfo | null> {
+-  const municipalityRow = (await database
+-    .prepare("SELECT value FROM settings WHERE key = 'municipality_name'")
+-    .get()) as { value: string } | undefined;
+-  const municipalityName = municipalityRow?.value || "Municipality";
+-
+-  // Find active, verified staff members in the responsible organization deterministically
+-  const staff = (await database
+-    .prepare(
+-      `SELECT users.id, users.display_name, users.role, users.organization_id,
+-              organizations.name AS organization_name
+-       FROM users
+-       JOIN organizations ON organizations.id = users.organization_id
+-       WHERE users.organization_id = ?
+-         AND users.status = 'ACTIVE'
+-         AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+-       ORDER BY users.created_at ASC`,
+-    )
+-    .all(organizationId)) as Array<{
+-      id: string;
+-      display_name: string;
+-      role: "OFFICIAL" | "LAW_ENFORCEMENT";
+-      organization_id: string;
+-      organization_name: string;
+-    }>;
+-
+-  if (staff.length === 0) {
+-    // If no verified staff member is assigned yet, check if any active staff exists in municipality
+-    const fallbackStaff = (await database
+-      .prepare(
+-        `SELECT users.id, users.display_name, users.role, users.organization_id,
+-                organizations.name AS organization_name
+-         FROM users
+-         JOIN organizations ON organizations.id = users.organization_id
+-         WHERE users.status = 'ACTIVE'
+-           AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+-         ORDER BY users.created_at ASC
+-         LIMIT 1`,
+-      )
+-      .get()) as
+-      | {
+-          id: string;
+-          display_name: string;
+-          role: "OFFICIAL" | "LAW_ENFORCEMENT";
+-          organization_id: string;
+-          organization_name: string;
+-        }
+-      | undefined;
+-
+-    if (!fallbackStaff) return null;
+-    return {
+-      id: fallbackStaff.id,
+-      displayName: fallbackStaff.display_name,
+-      role: fallbackStaff.role,
+-      organizationId: fallbackStaff.organization_id,
+-      organizationName: fallbackStaff.organization_name,
+-      municipalityName,
+-    };
+-  }
+-
+-  const primary = staff[0];
+-  return {
+-    id: primary.id,
+-    displayName: primary.display_name,
+-    role: primary.role,
+-    organizationId: primary.organization_id,
+-    organizationName: primary.organization_name,
+-    municipalityName,
+-  };
+-}
+-
+-/**
+- * Routes a report to the best organization based on municipality and location.
++ * Routes a report only to the administrator-configured organization for the
++ * selected active category.
+  *
+- * Priority order:
+- * 1. If a municipality is selected, find an active category in that municipality's organizations
+- * 2. If no municipality match, find the nearest organization with an active category for the issue type
+- * 3. Fall back to the category's default organization
++ * CivicSignal has no geocoding, parcel, or municipal-boundary provider. The
++ * previous municipality and nearest-organization guesses could send a report
++ * outside the responsible organization, so they are intentionally gone.
++ * Residents and staff can still choose a different configured category, and
++ * assigned staff can transfer a report to another configured department.
+  */
+ export async function routeReportToOrganization(
+   database: CivicDatabase,
+   categoryId: string,
+-  municipalityId: string | null,
+-  coordinates: Coordinates | null,
++  _municipalityId: string | null,
++  _coordinates: Coordinates | null,
+ ): Promise<CategoryRoutingResult> {
+-  // Step 1: Try to find a category in the selected municipality
+-  if (municipalityId) {
+-    const municipalityCategory = (await database
+-      .prepare(
+-        `SELECT categories.id, categories.organization_id, organizations.name AS organization_name,
+-                municipalities.id AS municipality_id, municipalities.name AS municipality_name
+-         FROM categories
+-         JOIN organizations ON organizations.id = categories.organization_id
+-         LEFT JOIN municipalities ON municipalities.id = organizations.municipality_id
+-         WHERE categories.name = (
+-           SELECT name FROM categories WHERE id = ?
+-         )
+-         AND organizations.municipality_id = ?
+-         AND categories.active = 1
+-         AND organizations.active = 1
+-         AND municipalities.active = 1
+-         LIMIT 1`,
+-      )
+-      .get(categoryId, municipalityId)) as
+-      | {
+-          id: string;
+-          organization_id: string;
+-          organization_name: string;
+-          municipality_id: string;
+-          municipality_name: string;
+-        }
+-      | undefined;
+-
+-    if (municipalityCategory) {
+-      return {
+-        categoryId: municipalityCategory.id,
+-        organizationId: municipalityCategory.organization_id,
+-        organizationName: municipalityCategory.organization_name,
+-        municipalityId: municipalityCategory.municipality_id,
+-        municipalityName: municipalityCategory.municipality_name,
+-        routingMethod: "municipality_match",
+-      };
+-    }
+-  }
+-
+-  // Step 2: If no municipality match and we have coordinates, find the nearest organization
+-  // with an active category for this issue type
+-  if (coordinates) {
+-    const categoryRow = (await database
+-      .prepare("SELECT name FROM categories WHERE id = ?")
+-      .get(categoryId)) as { name: string } | undefined;
+-
+-    if (categoryRow) {
+-      const nearbyOrganizations = (await database
+-        .prepare(
+-          `SELECT categories.id, categories.organization_id, organizations.name AS organization_name,
+-                  municipalities.id AS municipality_id, municipalities.name AS municipality_name,
+-                  municipalities.center_latitude, municipalities.center_longitude
+-           FROM categories
+-           JOIN organizations ON organizations.id = categories.organization_id
+-           LEFT JOIN municipalities ON municipalities.id = organizations.municipality_id
+-           WHERE categories.name = ?
+-           AND categories.active = 1
+-           AND organizations.active = 1
+-           AND (municipalities.active = 1 OR municipalities.id IS NULL)`,
+-        )
+-        .all(categoryRow.name)) as Array<{
+-        id: string;
+-        organization_id: string;
+-        organization_name: string;
+-        municipality_id: string | null;
+-        municipality_name: string | null;
+-        center_latitude: number | null;
+-        center_longitude: number | null;
+-      }>;
+-
+-      let nearest: {
+-        id: string;
+-        organization_id: string;
+-        organization_name: string;
+-        municipality_id: string | null;
+-        municipality_name: string | null;
+-        distanceKm: number;
+-      } | null = null;
+-
+-      for (const org of nearbyOrganizations) {
+-        const orgLat = org.center_latitude;
+-        const orgLon = org.center_longitude;
+-
+-        if (orgLat === null || orgLon === null) {
+-          // Organization without location - treat as infinite distance
+-          if (!nearest) {
+-            nearest = {
+-              id: org.id,
+-              organization_id: org.organization_id,
+-              organization_name: org.organization_name,
+-              municipality_id: org.municipality_id,
+-              municipality_name: org.municipality_name,
+-              distanceKm: Infinity,
+-            };
+-          }
+-          continue;
+-        }
+-
+-        const distanceKm = haversineDistance(
+-          coordinates.latitude,
+-          coordinates.longitude,
+-          orgLat,
+-          orgLon,
+-        );
+-
+-        if (!nearest || distanceKm < nearest.distanceKm) {
+-          nearest = {
+-            id: org.id,
+-            organization_id: org.organization_id,
+-            organization_name: org.organization_name,
+-            municipality_id: org.municipality_id,
+-            municipality_name: org.municipality_name,
+-            distanceKm,
+-          };
+-        }
+-      }
+-
+-      if (nearest && nearest.distanceKm < Infinity) {
+-        return {
+-          categoryId: nearest.id,
+-          organizationId: nearest.organization_id,
+-          organizationName: nearest.organization_name,
+-          municipalityId: nearest.municipality_id,
+-          municipalityName: nearest.municipality_name,
+-          routingMethod: "nearest_organization",
+-        };
+-      }
+-    }
+-  }
+-
+-  // Step 3: Fall back to the category's default organization
+-  const defaultCategory = (await database
++  const category = (await database
+     .prepare(
+-      `SELECT categories.id, categories.organization_id, organizations.name AS organization_name,
+-              municipalities.id AS municipality_id, municipalities.name AS municipality_name
++      `SELECT categories.id, categories.organization_id,
++              organizations.name AS organization_name,
++              municipalities.id AS municipality_id,
++              municipalities.name AS municipality_name
+        FROM categories
+        JOIN organizations ON organizations.id = categories.organization_id
+        LEFT JOIN municipalities ON municipalities.id = organizations.municipality_id
+        WHERE categories.id = ?
+-       AND categories.active = 1
+-       AND organizations.active = 1`,
++         AND categories.active = 1
++         AND organizations.active = 1
++         AND (organizations.municipality_id IS NULL OR municipalities.active = 1)`,
+     )
+     .get(categoryId)) as
+     | {
+@@ -298,7 +83,7 @@ export async function routeReportToOrganization(
+       }
+     | undefined;
+ 
+-  if (!defaultCategory) {
++  if (!category) {
+     throw new ApiError(
+       422,
+       "VALIDATION_ERROR",
+@@ -308,26 +93,11 @@ export async function routeReportToOrganization(
+   }
+ 
+   return {
+-    categoryId: defaultCategory.id,
+-    organizationId: defaultCategory.organization_id,
+-    organizationName: defaultCategory.organization_name,
+-    municipalityId: defaultCategory.municipality_id,
+-    municipalityName: defaultCategory.municipality_name,
++    categoryId: category.id,
++    organizationId: category.organization_id,
++    organizationName: category.organization_name,
++    municipalityId: category.municipality_id,
++    municipalityName: category.municipality_name,
+     routingMethod: "category_default",
+   };
+ }
+-
+-function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+-  const R = 6371; // Earth's radius in kilometers
+-  const dLat = toRadians(lat2 - lat1);
+-  const dLon = toRadians(lon2 - lon1);
+-  const a =
+-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+-  return R * c;
+-}
+-
+-function toRadians(degrees: number): number {
+-  return degrees * (Math.PI / 180);
+-}
+diff --git a/server/municipality-fallback.ts b/server/municipality-fallback.ts
+deleted file mode 100644
+index d6d1a98..0000000
+--- a/server/municipality-fallback.ts
++++ /dev/null
+@@ -1,143 +0,0 @@
+-import type { CivicDatabase } from "./database.js";
+-
+-export type Coordinates = { latitude: number; longitude: number };
+-
+-/**
+- * Finds the nearest active staff member from any municipality when the
+- * selected municipality has no available staff.
+- *
+- * Uses Haversine formula to calculate distance between coordinates.
+- */
+-export async function findNearestStaff(
+-  database: CivicDatabase,
+-  coordinates: Coordinates | null,
+-  excludeMunicipalityId: string | null,
+-): Promise<{ id: string; displayName: string; role: string; organizationId: string; organizationName: string; distanceKm: number } | null> {
+-  if (!coordinates) {
+-    // If no coordinates, fall back to any active staff from a different municipality
+-    const fallbackStaff = (await database
+-      .prepare(
+-        `SELECT users.id, users.display_name, users.role, users.organization_id,
+-                organizations.name AS organization_name
+-         FROM users
+-         JOIN organizations ON organizations.id = users.organization_id
+-         WHERE users.status = 'ACTIVE'
+-           AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+-           AND organizations.active = 1
+-         ORDER BY users.created_at ASC
+-         LIMIT 1`,
+-      )
+-      .get()) as
+-      | {
+-          id: string;
+-          display_name: string;
+-          role: string;
+-          organization_id: string;
+-          organization_name: string;
+-        }
+-      | undefined;
+-
+-    if (!fallbackStaff) return null;
+-    return {
+-      id: fallbackStaff.id,
+-      displayName: fallbackStaff.display_name,
+-      role: fallbackStaff.role,
+-      organizationId: fallbackStaff.organization_id,
+-      organizationName: fallbackStaff.organization_name,
+-      distanceKm: 0,
+-    };
+-  }
+-
+-  // Get all active staff with their organization locations
+-  const staffWithLocations = (await database
+-    .prepare(
+-      `SELECT users.id, users.display_name, users.role, users.organization_id,
+-              organizations.name AS organization_name,
+-              municipalities.center_latitude, municipalities.center_longitude
+-       FROM users
+-       JOIN organizations ON organizations.id = users.organization_id
+-       LEFT JOIN municipalities ON municipalities.id = organizations.municipality_id
+-       WHERE users.status = 'ACTIVE'
+-         AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+-         AND organizations.active = 1
+-         AND (municipalities.id IS NULL OR municipalities.id != ? OR municipalities.active = 1)`,
+-    )
+-    .all(excludeMunicipalityId ?? "")) as Array<{
+-    id: string;
+-    display_name: string;
+-    role: string;
+-    organization_id: string;
+-    organization_name: string;
+-    center_latitude: number | null;
+-    center_longitude: number | null;
+-  }>;
+-
+-  // Calculate distances and find the nearest
+-  let nearest: {
+-    id: string;
+-    displayName: string;
+-    role: string;
+-    organizationId: string;
+-    organizationName: string;
+-    distanceKm: number;
+-  } | null = null;
+-
+-  for (const staff of staffWithLocations) {
+-    const staffLat = staff.center_latitude;
+-    const staffLon = staff.center_longitude;
+-
+-    if (staffLat === null || staffLon === null) {
+-      // Staff without a location - consider as fallback with infinite distance
+-      if (!nearest) {
+-        nearest = {
+-          id: staff.id,
+-          displayName: staff.display_name,
+-          role: staff.role,
+-          organizationId: staff.organization_id,
+-          organizationName: staff.organization_name,
+-          distanceKm: Infinity,
+-        };
+-      }
+-      continue;
+-    }
+-
+-    const distanceKm = haversineDistance(
+-      coordinates.latitude,
+-      coordinates.longitude,
+-      staffLat,
+-      staffLon,
+-    );
+-
+-    if (!nearest || distanceKm < nearest.distanceKm) {
+-      nearest = {
+-        id: staff.id,
+-        displayName: staff.display_name,
+-        role: staff.role,
+-        organizationId: staff.organization_id,
+-        organizationName: staff.organization_name,
+-        distanceKm,
+-      };
+-    }
+-  }
+-
+-  return nearest;
+-}
+-
+-/**
+- * Haversine formula to calculate the great-circle distance between two points
+- * on a sphere given their longitudes and latitudes.
+- */
+-function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+-  const R = 6371; // Earth's radius in kilometers
+-  const dLat = toRadians(lat2 - lat1);
+-  const dLon = toRadians(lon2 - lon1);
+-  const a =
+-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+-  return R * c;
+-}
+-
+-function toRadians(degrees: number): number {
+-  return degrees * (Math.PI / 180);
+-}
+diff --git a/server/routes/reports.ts b/server/routes/reports.ts
+index e0bbcd4..f7d1957 100644
+--- a/server/routes/reports.ts
++++ b/server/routes/reports.ts
+@@ -26,8 +26,7 @@ import {
+   recordReportEvent,
+ } from "../activity.js";
+ import { ApiError, isoTime, pathId } from "../http.js";
+-import { resolveMunicipalityRepresentative, routeReportToOrganization } from "../jurisdiction.js";
+-import { findNearestStaff } from "../municipality-fallback.js";
++import { routeReportToOrganization } from "../jurisdiction.js";
+ import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
+ import {
+   findSimilarReports,
+@@ -72,6 +71,9 @@ const EVENT_TYPES: Record<string, string> = {
+   REPORT_UPDATE_ADDED: "update",
+   REPORT_CLAIMED: "assignment",
+   REPORT_HANDED_OFF: "assignment",
++  REPORT_TRANSFERRED: "assignment",
++  REPORT_STILL_HAPPENING: "resident_feedback",
++  REPORTER_CONFIRMATION: "resident_feedback",
+   REPORT_MODERATED: "moderation",
+ };
+ 
+@@ -118,6 +120,13 @@ type ReportRow = {
+   reporter_confirmation: string | null;
+   reporter_confirmed_at: number | null;
+   first_attachment_id: string | null;
++  routing_source: "AI" | "RESIDENT" | "AI_FALLBACK" | "LEGACY" | null;
++  routing_confidence: number | null;
++  routing_review_required: number | boolean | null;
++  latest_update_id: string | null;
++  latest_update_message: string | null;
++  latest_update_created_at: number | null;
++  latest_update_author: string | null;
+   similar_report_id?: string | null;
+   similarity_score?: number | null;
+ };
+@@ -136,9 +145,23 @@ const REPORT_SELECT = `
+          assignee.id AS assigned_user_id, assignee.display_name AS assigned_display_name,
+          assignee.role AS assigned_role,
+          reports.reporter_confirmation, reports.reporter_confirmed_at,
++         reports.routing_source, reports.routing_confidence, reports.routing_review_required,
+          (SELECT attachments.id FROM attachments
+           WHERE attachments.report_id = reports.id
+-          ORDER BY attachments.created_at, attachments.id LIMIT 1) AS first_attachment_id
++          ORDER BY attachments.created_at, attachments.id LIMIT 1) AS first_attachment_id,
++         (SELECT report_updates.id FROM report_updates
++          WHERE report_updates.report_id = reports.id
++          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_id,
++         (SELECT report_updates.message FROM report_updates
++          WHERE report_updates.report_id = reports.id
++          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_message,
++         (SELECT report_updates.created_at FROM report_updates
++          WHERE report_updates.report_id = reports.id
++          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_created_at,
++         (SELECT users.display_name FROM report_updates
++          LEFT JOIN users ON users.id = report_updates.author_user_id
++          WHERE report_updates.report_id = reports.id
++          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_author
+   FROM reports
+   JOIN categories ON categories.id = reports.category_id
+   JOIN organizations ON organizations.id = reports.organization_id
+@@ -151,15 +174,22 @@ const coordinateSchema = z.preprocess(
+   z.number().finite().optional(),
+ );
+ 
++const routingConfidenceSchema = z.preprocess(
++  (value) => value === "" || value === null ? undefined : typeof value === "string" ? Number(value) : value,
++  z.number().min(0).max(1).optional(),
++);
++
+ const createReportSchema = z.object({
+   categoryId: z.string().trim().min(1),
+   municipalityId: z.string().trim().optional(),
+-  title: z.string().trim().max(140).optional().default(""),
+-  description: z.string().trim().max(4000).optional().default(""),
++  title: z.string().trim().min(4, "Add a short title for the problem.").max(140),
++  description: z.string().trim().min(10, "Describe what is happening and where.").max(4000),
+   location: z.string().trim().max(300).optional().default(""),
+   latitude: coordinateSchema,
+   longitude: coordinateSchema,
+   accuracyMeters: coordinateSchema,
++  routingSource: z.enum(["AI", "RESIDENT", "AI_FALLBACK"]).optional().default("RESIDENT"),
++  routingConfidence: routingConfidenceSchema,
+ }).superRefine((input, context) => {
+   if ((input.latitude === undefined) !== (input.longitude === undefined)) {
+     context.addIssue({ code: "custom", path: ["location"], message: "A complete GPS pin is required." });
+@@ -190,6 +220,8 @@ const listQuerySchema = z.object({
+   status: z.enum(REPORT_STATUSES).optional(),
+   categoryId: z.string().trim().min(1).optional(),
+   q: z.string().trim().max(200).optional(),
++  assignment: z.enum(["mine", "unassigned"]).optional(),
++  followUp: z.enum(["needs"]).optional(),
+ });
+ 
+ const impactQuerySchema = z.object({
+@@ -205,6 +237,11 @@ const handoffSchema = z.object({
+   reason: z.string().trim().min(3).max(500),
+ });
+ 
++const transferSchema = z.object({
++  categoryId: z.string().trim().min(1),
++  reason: z.string().trim().min(5).max(500),
++});
++
+ const statusSchema = z.object({
+   status: z.enum(REPORT_STATUSES),
+ });
+@@ -260,6 +297,9 @@ function assertCanManage(
+ }
+ 
+ function serializeSummary(row: ReportRow) {
++  const followUpNeeded =
++    (row.status === "RESOLVED" || row.status === "CLOSED") &&
++    (row.reporter_confirmation === "STILL_HAPPENING" || row.reporter_confirmation === "DONT_KNOW");
+   return {
+     id: row.id,
+     referenceCode: row.reference_code,
+@@ -305,6 +345,22 @@ function serializeSummary(row: ReportRow) {
+     updatedAt: isoTime(row.updated_at),
+     reporterConfirmation: row.reporter_confirmation as "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null,
+     reporterConfirmedAt: row.reporter_confirmed_at ? isoTime(row.reporter_confirmed_at) : null,
++    followUpNeeded,
++    routing: row.routing_source
++      ? {
++          source: row.routing_source,
++          confidence: row.routing_confidence,
++          reviewRequired: Boolean(row.routing_review_required),
++        }
++      : null,
++    latestUpdate: row.latest_update_id
++      ? {
++          id: row.latest_update_id,
++          message: row.latest_update_message ?? "",
++          createdAt: isoTime(row.latest_update_created_at ?? row.updated_at),
++          author: row.latest_update_author ? { displayName: row.latest_update_author } : null,
++        }
++      : null,
+     attachments: row.first_attachment_id
+       ? [{
+           id: row.first_attachment_id,
+@@ -376,12 +432,8 @@ async function serializeDetail(
+ 
+   const staffScope =
+     isStaffRole(user.role) && row.organization_id === user.organizationId;
+-
+-  const nearestRep = await resolveMunicipalityRepresentative(
+-    database,
+-    row.organization_id,
+-    row.location,
+-  );
++  const canReadStaffNotes = user.role === "ADMIN" || staffScope;
++  const internalAssignmentActions = new Set(["REPORT_HANDED_OFF", "REPORT_TRANSFERRED"]);
+ 
+   // Check if this is a persistent problem
+   let isPersistentProblem = false;
+@@ -416,7 +468,9 @@ async function serializeDetail(
+       id: event.id,
+       type: EVENT_TYPES[event.action] ?? "event",
+       action: event.action,
+-      message: event.message,
++      message: !canReadStaffNotes && internalAssignmentActions.has(event.action)
++        ? "This report was reassigned to the responsible organization."
++        : event.message,
+       fromStatus: event.from_status as ReportStatus | null,
+       toStatus: event.to_status as ReportStatus | null,
+       createdAt: isoTime(event.created_at),
+@@ -433,19 +487,11 @@ async function serializeDetail(
+     capabilities: {
+       canClaim: staffScope && row.assigned_user_id === null,
+       canHandoff: staffScope && row.assigned_user_id === user.id,
++      canTransfer: staffScope && row.assigned_user_id === user.id,
+       canUpdateStatus: staffScope,
+       canAddUpdate: staffScope,
+       canModerate: user.role === "ADMIN",
+     },
+-    nearestRepresentative: nearestRep
+-      ? {
+-          id: nearestRep.id,
+-          displayName: nearestRep.displayName,
+-          role: nearestRep.role,
+-          organizationName: nearestRep.organizationName,
+-          municipalityName: nearestRep.municipalityName,
+-        }
+-      : null,
+     isPersistentProblem,
+     relatedReportCount,
+   };
+@@ -561,7 +607,7 @@ export function createReportsRouter(deps: {
+       }
+     }
+ 
+-    // Route the report to the best organization based on municipality and location
++    // Route only to the configured organization for the selected category.
+     const coordinates = input.latitude !== undefined && input.longitude !== undefined
+       ? { latitude: input.latitude, longitude: input.longitude }
+       : null;
+@@ -586,7 +632,7 @@ export function createReportsRouter(deps: {
+     // Override municipalityId with the routed municipality
+     municipalityId = routing.municipalityId;
+ 
+-    const title = input.title || `${category.name} issue`;
++    const title = input.title;
+     const description = input.description;
+     const location = input.location || "Precise GPS pin attached";
+     const latitude = input.latitude ?? null;
+@@ -595,36 +641,33 @@ export function createReportsRouter(deps: {
+     const now = Date.now();
+     const reportId = randomUUID();
+     const file = request.file;
+-    if (!file) {
+-      throw new ApiError(
+-        422,
+-        "VALIDATION_ERROR",
+-        "A photo of the issue is required.",
+-        { photo: ["A photo of the issue is required."] },
+-      );
+-    }
+-    const fileContentType = actualImageType(file.buffer);
+-    if (!fileContentType || fileContentType !== file.mimetype.toLowerCase()) {
++    const fileContentType = file ? actualImageType(file.buffer) : null;
++    if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
+       throw new ApiError(
+         415,
+         "INVALID_IMAGE_CONTENT",
+         "The file contents do not match a supported image type.",
+       );
+     }
+-    const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
+-
+-    // Generate image embedding for similarity detection
+-    const imageEmbedding = await generateImageEmbedding(file.buffer);
++    const storedPhoto = file && fileContentType
++      ? await photos.save(file.buffer, file.originalname, fileContentType)
++      : null;
+ 
+-    // Find similar reports
+-    const similarReport = await findSimilarReports(
+-      database,
+-      reportId,
+-      latitude,
+-      longitude,
+-      category.id,
+-      imageEmbedding,
+-    );
++    // Photo comparison is optional, and only runs when a photo was supplied.
++    const imageEmbedding = file ? await generateImageEmbedding(file.buffer) : null;
++    const similarReport = imageEmbedding
++      ? await findSimilarReports(
++          database,
++          reportId,
++          latitude,
++          longitude,
++          category.id,
++          imageEmbedding,
++        )
++      : null;
++    const routingReviewRequired =
++      input.routingSource === "AI_FALLBACK" ||
++      (input.routingSource === "AI" && (input.routingConfidence ?? 0) < 0.6);
+ 
+     let referenceCode = "";
+     let pushRecipients: string[] = [];
+@@ -635,8 +678,9 @@ export function createReportsRouter(deps: {
+           `INSERT INTO reports
+             (id, reference_code, title, description, location, latitude, longitude, accuracy_meters, category_id,
+              organization_id, municipality_id, reporter_user_id, assigned_user_id, status,
+-             moderation_status, image_embedding, similar_report_id, similarity_score, created_at, updated_at)
+-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?)`,
++             moderation_status, image_embedding, similar_report_id, similarity_score,
++             routing_source, routing_confidence, routing_review_required, created_at, updated_at)
++           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?, ?, ?, ?)`,
+         )
+         .run(
+           reportId,
+@@ -651,9 +695,12 @@ export function createReportsRouter(deps: {
+           category.organization_id,
+           municipalityId,
+           reporterUserId,
+-          serializeEmbedding(imageEmbedding),
++          imageEmbedding ? serializeEmbedding(imageEmbedding) : null,
+           similarReport?.similarReportId ?? null,
+           similarReport?.similarityScore ?? null,
++          input.routingSource,
++          input.routingConfidence ?? null,
++          routingReviewRequired ? 1 : 0,
+           now,
+           now,
+         );
+@@ -675,7 +722,7 @@ export function createReportsRouter(deps: {
+         message: title,
+       });
+ 
+-      if (file && storedPhoto) {
++      if (file && storedPhoto && fileContentType) {
+         await database
+           .prepare(
+             `INSERT INTO attachments
+@@ -687,7 +734,7 @@ export function createReportsRouter(deps: {
+             reportId,
+             file.originalname,
+             storedPhoto.storedName,
+-            fileContentType!,
++            fileContentType,
+             file.size,
+             now,
+           );
+@@ -700,42 +747,6 @@ export function createReportsRouter(deps: {
+         message: `${referenceCode} was submitted to ${category.name} and needs review.`,
+       }, true);
+ 
+-      // Check if there are staff in the selected municipality, if not find nearest
+-      if (municipalityId) {
+-        const municipalityStaff = (await database
+-          .prepare(
+-            `SELECT users.id
+-             FROM users
+-             JOIN organizations ON organizations.id = users.organization_id
+-             WHERE organizations.municipality_id = ?
+-               AND users.status = 'ACTIVE'
+-               AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+-             LIMIT 1`,
+-          )
+-          .get(municipalityId)) as { id: string } | undefined;
+-
+-        if (!municipalityStaff) {
+-          // No staff in this municipality, find nearest staff
+-          const coordinates = latitude !== null && longitude !== null
+-            ? { latitude, longitude }
+-            : null;
+-          const nearestStaff = await findNearestStaff(database, coordinates, municipalityId);
+-
+-          if (nearestStaff) {
+-            // Assign to nearest staff or create a notification
+-            await createNotification(database, {
+-              userId: nearestStaff.id,
+-              reportId,
+-              type: "MUNICIPALITY_FALLBACK",
+-              title: `Nearest officer assignment: ${referenceCode}`,
+-              message: `This report from municipality with no available staff has been routed to you as the nearest officer (${nearestStaff.distanceKm === Infinity ? 'no location data' : `${nearestStaff.distanceKm.toFixed(1)} km away`}).`,
+-              deferPush: true,
+-            });
+-            pushRecipients.push(nearestStaff.id);
+-          }
+-        }
+-      }
+-
+       // Check if this is a persistent problem and notify appropriate staff
+       if (similarReport) {
+         const persistenceCheck = await detectPersistentProblem(database, reportId);
+@@ -801,66 +812,68 @@ export function createReportsRouter(deps: {
+     }
+   }
+ 
++  function assertFollowUpWindow(row: ReportRow): void {
++    if (row.status !== "RESOLVED" && row.status !== "CLOSED") {
++      throw new ApiError(
++        409,
++        "FOLLOW_UP_NOT_AVAILABLE",
++        "Resident follow-up is available after the organization marks the report resolved or closed.",
++      );
++    }
++  }
++
+   async function recordStillHappening(row: ReportRow, actorUserId: string | null) {
+-    const nextStatus = row.status === "RESOLVED" || row.status === "CLOSED"
+-      ? "UNDER_REVIEW"
+-      : row.status;
++    assertFollowUpWindow(row);
+     const now = Date.now();
++    // Resident feedback is independent of the official status. It never rewinds
++    // the organization's recorded status; staff decide whether to reopen work.
+     await database
+-      .prepare("UPDATE reports SET status = ?, reporter_confirmation = 'STILL_HAPPENING', reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
+-      .run(nextStatus, now, now, row.id);
++      .prepare("UPDATE reports SET reporter_confirmation = 'STILL_HAPPENING', reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
++      .run(now, now, row.id);
+     await recordReportEvent(database, {
+       reportId: row.id,
+       actorUserId,
+       action: "REPORT_STILL_HAPPENING",
+-      fromStatus: row.status === nextStatus ? null : row.status,
+-      toStatus: row.status === nextStatus ? null : nextStatus,
+-      message: row.status === nextStatus
+-        ? "A resident confirmed this issue is still happening."
+-        : "A resident says this issue is still happening. The report was returned for staff review.",
++      message: "A resident reported that this issue is still happening.",
+     });
+     await recordAudit(database, {
+       actorUserId,
+       action: "REPORT_STILL_HAPPENING",
+       targetType: "REPORT",
+       targetId: row.id,
+-      details: { referenceCode: row.reference_code, fromStatus: row.status, toStatus: nextStatus },
++      details: { referenceCode: row.reference_code, status: row.status },
+     });
+ 
+-    // If the report was resolved/closed, notify the staff who resolved it
+-    if (row.status === "RESOLVED" || row.status === "CLOSED") {
+-      let notifyUserId = row.assigned_user_id;
+-      if (!notifyUserId) {
+-        // Find who resolved it from timeline
+-        const resolver = (await database
+-          .prepare(
+-            `SELECT actor_user_id
+-             FROM report_events
+-             WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status = 'RESOLVED'
+-             ORDER BY created_at DESC
+-             LIMIT 1`,
+-          )
+-          .get(row.id)) as { actor_user_id: string | null } | undefined;
+-        notifyUserId = resolver?.actor_user_id ?? null;
+-      }
++    let notifyUserId = row.assigned_user_id;
++    if (!notifyUserId) {
++      const resolver = (await database
++        .prepare(
++          `SELECT actor_user_id
++           FROM report_events
++           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status IN ('RESOLVED', 'CLOSED')
++           ORDER BY created_at DESC
++           LIMIT 1`,
++        )
++        .get(row.id)) as { actor_user_id: string | null } | undefined;
++      notifyUserId = resolver?.actor_user_id ?? null;
++    }
+ 
+-      if (notifyUserId) {
+-        await createNotification(database, {
+-          userId: notifyUserId,
+-          reportId: row.id,
+-          type: "REPORT_STILL_HAPPENING",
+-          title: `Problem persists: ${row.reference_code}`,
+-          message: `A resident reports that "${row.title}" is still happening after being marked as ${row.status.toLowerCase()}. The report has been returned to UNDER_REVIEW.`,
+-          metadata: { previousStatus: row.status },
+-        });
+-      }
++    if (notifyUserId) {
++      await createNotification(database, {
++        userId: notifyUserId,
++        reportId: row.id,
++        type: "REPORT_STILL_HAPPENING",
++        title: `Problem persists: ${row.reference_code}`,
++        message: `A resident reports that "${row.title}" is still happening after the report was marked ${row.status.toLowerCase()}. The official status has not changed; review whether follow-up is needed.`,
++        metadata: { previousStatus: row.status },
++      });
+     }
+ 
+     await notifyOrganization(database, row.organization_id, {
+       reportId: row.id,
+       type: "REPORT_STILL_HAPPENING",
+       title: `Resident follow-up: ${row.reference_code}`,
+-      message: `A resident says “${row.title}” is still happening. Please review the report.`,
++      message: `A resident says “${row.title}” is still happening. The official status remains ${row.status.toLowerCase()}; review whether follow-up is needed.`,
+     });
+     const refreshed = await loadReport(database, row.id);
+     return serializeDetail(database, refreshed, {
+@@ -871,6 +884,7 @@ export function createReportsRouter(deps: {
+   }
+ 
+   async function recordConfirmation(row: ReportRow, confirmation: "FIXED" | "DONT_KNOW", actorUserId: string | null) {
++    assertFollowUpWindow(row);
+     const now = Date.now();
+     await database
+       .prepare("UPDATE reports SET reporter_confirmation = ?, reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
+@@ -893,13 +907,13 @@ export function createReportsRouter(deps: {
+ 
+     // Notify the staff who handled this report
+     let notifyUserId = row.assigned_user_id;
+-    if (!notifyUserId && row.status === "RESOLVED") {
+-      // If no assigned user but resolved, try to find who resolved it from timeline
++    if (!notifyUserId && (row.status === "RESOLVED" || row.status === "CLOSED")) {
++      // If no assigned user, try to find who recorded the completion from timeline.
+       const resolver = (await database
+         .prepare(
+           `SELECT actor_user_id
+            FROM report_events
+-           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status = 'RESOLVED'
++           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status IN ('RESOLVED', 'CLOSED')
+            ORDER BY created_at DESC
+            LIMIT 1`,
+         )
+@@ -985,6 +999,21 @@ export function createReportsRouter(deps: {
+       const pattern = `%${query.q.toLowerCase()}%`;
+       parameters.push(pattern, pattern, pattern);
+     }
++    if (query.assignment) {
++      if (!isStaffRole(user.role)) {
++        throw new ApiError(403, "FORBIDDEN", "Your account does not have permission to perform this action.");
++      }
++      if (query.assignment === "mine") {
++        filters.push("reports.assigned_user_id = ?");
++        parameters.push(user.id);
++      } else {
++        filters.push("reports.assigned_user_id IS NULL");
++      }
++    }
++    if (query.followUp === "needs") {
++      filters.push("reports.status IN ('RESOLVED', 'CLOSED')");
++      filters.push("reports.reporter_confirmation IN ('STILL_HAPPENING', 'DONT_KNOW')");
++    }
+     const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+ 
+     const rows = (await database
+@@ -1076,7 +1105,7 @@ export function createReportsRouter(deps: {
+         throw new ApiError(
+           422,
+           "VALIDATION_ERROR",
+-          "A photo of the issue is required to create a report.",
++          "Upload or take a photo to analyze it.",
+           { photo: ["Please upload or take a photo to analyze."] },
+         );
+       }
+@@ -1438,6 +1467,155 @@ export function createReportsRouter(deps: {
+     response.json(await serializeDetail(database, await loadReport(database, row.id), user));
+   });
+ 
++  router.post("/:reportId/transfer", authenticate(database), requireStaff(), async (request, response) => {
++    const user = currentUser(request);
++    const input = transferSchema.parse(request.body);
++    const row = await loadReport(database, pathId(request, "reportId"));
++    assertCanView(row, user);
++    assertCanManage(row, user);
++    if (row.assigned_user_id !== user.id) {
++      throw new ApiError(409, "NOT_REPORT_OWNER", "Only the staff member currently handling this report can transfer it.");
++    }
++
++    const target = (await database
++      .prepare(
++        `SELECT categories.id, categories.name AS category_name,
++                organizations.id AS organization_id, organizations.name AS organization_name,
++                organizations.municipality_id, municipalities.name AS municipality_name
++         FROM categories
++         JOIN organizations ON organizations.id = categories.organization_id
++         LEFT JOIN municipalities ON municipalities.id = organizations.municipality_id
++         WHERE categories.id = ?
++           AND categories.active = 1
++           AND organizations.active = 1
++           AND (organizations.municipality_id IS NULL OR municipalities.active = 1)`,
++      )
++      .get(input.categoryId)) as
++      | {
++          id: string;
++          category_name: string;
++          organization_id: string;
++          organization_name: string;
++          municipality_id: string | null;
++          municipality_name: string | null;
++        }
++      | undefined;
++
++    if (!target || target.organization_id === row.organization_id) {
++      throw new ApiError(
++        422,
++        "INVALID_TRANSFER",
++        "Choose an active category handled by a different organization.",
++      );
++    }
++    const targetStaff = (await database
++      .prepare(
++        `SELECT id FROM users
++         WHERE organization_id = ? AND status = 'ACTIVE'
++           AND verified_at IS NOT NULL AND role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
++         LIMIT 1`,
++      )
++      .get(target.organization_id)) as { id: string } | undefined;
++    if (!targetStaff) {
++      throw new ApiError(
++        422,
++        "TARGET_UNAVAILABLE",
++        "That department has no active verified staff member to receive the report.",
++      );
++    }
++
++    const now = Date.now();
++    let pushRecipient: string | null = null;
++    await database.transaction(async () => {
++      const updated = await database
++        .prepare(
++          `UPDATE reports
++           SET category_id = ?, organization_id = ?, municipality_id = ?,
++               assigned_user_id = NULL, status = 'SUBMITTED', updated_at = ?
++           WHERE id = ? AND assigned_user_id = ?
++           RETURNING id`,
++        )
++        .get(
++          target.id,
++          target.organization_id,
++          target.municipality_id,
++          now,
++          row.id,
++          user.id,
++        ) as { id: string } | undefined;
++      if (!updated) {
++        throw new ApiError(
++          409,
++          "REPORT_OWNERSHIP_CHANGED",
++          "Another staff member changed ownership. Reload the report and try again.",
++        );
++      }
++
++      await recordReportEvent(database, {
++        reportId: row.id,
++        actorUserId: user.id,
++        action: "REPORT_TRANSFERRED",
++        fromStatus: row.status,
++        toStatus: "SUBMITTED",
++        message: `Transferred to ${target.organization_name} (${target.category_name}). Reason: ${input.reason}`,
++      });
++      const residentMessage =
++        `Your report was transferred to ${target.organization_name} so the right team can review it. ` +
++        "The report is back in the submitted stage while the receiving department reviews it.";
++      await database
++        .prepare(
++          `INSERT INTO report_updates (id, report_id, author_user_id, message, created_at)
++           VALUES (?, ?, ?, ?, ?)`,
++        )
++        .run(randomUUID(), row.id, user.id, residentMessage, now);
++      await recordReportEvent(database, {
++        reportId: row.id,
++        actorUserId: user.id,
++        action: "REPORT_UPDATE_ADDED",
++        message: residentMessage,
++      });
++
++      pushRecipient = await notifyReporterOfReport(
++        database,
++        row,
++        "REPORT_TRANSFERRED",
++        `Your report was transferred to ${target.organization_name}`,
++        residentMessage,
++        true,
++      );
++      await notifyOrganization(database, target.organization_id, {
++        reportId: row.id,
++        type: "REPORT_TRANSFERRED",
++        title: `Transferred report: ${row.reference_code}`,
++        message: `${row.reference_code} was transferred to ${target.organization_name} for review.`,
++      }, true);
++      await recordAudit(database, {
++        actorUserId: user.id,
++        action: "REPORT_TRANSFERRED",
++        targetType: "REPORT",
++        targetId: row.id,
++        details: {
++          referenceCode: row.reference_code,
++          fromOrganizationId: row.organization_id,
++          fromCategoryId: row.category_id,
++          toOrganizationId: target.organization_id,
++          toCategoryId: target.id,
++          reason: input.reason,
++        },
++      });
++    });
++
++    if (pushRecipient) {
++      await sendWebPushToUser(database, pushRecipient, {
++        title: `Your report was transferred to ${target.organization_name}`,
++        message: "The receiving department will review it. Track the current status from your account.",
++        reportId: row.id,
++      });
++    }
++
++    response.json(await serializeDetail(database, await loadReport(database, row.id), user));
++  });
++
+   router.post(
+     "/:reportId/status",
+     authenticate(database),
+diff --git a/shared/contracts.ts b/shared/contracts.ts
+index be78b81..6094057 100644
+--- a/shared/contracts.ts
++++ b/shared/contracts.ts
+@@ -121,6 +121,14 @@ export type Attachment = {
+   contentType?: string;
+ };
+ 
++export type ReportRoutingSource = "AI" | "RESIDENT" | "AI_FALLBACK" | "LEGACY";
++
++export type ReportRouting = {
++  source: ReportRoutingSource;
++  confidence?: number | null;
++  reviewRequired: boolean;
++};
++
+ export type ReportUpdate = {
+   id: string;
+   message: string;
+@@ -157,19 +165,15 @@ export type Report = {
+   moderationStatus?: string | null;
+   reporterConfirmation?: "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null;
+   reporterConfirmedAt?: string | null;
++  followUpNeeded?: boolean;
++  routing?: ReportRouting | null;
++  latestUpdate?: ReportUpdate | null;
+   attachments?: Attachment[];
+   updates?: ReportUpdate[];
+   timeline?: ReportTimelineEntry[];
+   allowedTransitions?: ReportStatus[];
+   canClaim?: boolean;
+   capabilities?: Record<string, boolean>;
+-  nearestRepresentative?: {
+-    id: string;
+-    displayName: string;
+-    role: UserRole;
+-    organizationName?: string;
+-    municipalityName?: string;
+-  } | null;
+   isPersistentProblem?: boolean;
+   relatedReportCount?: number;
+   similarReportId?: string | null;
+diff --git a/src/App.tsx b/src/App.tsx
+index 93cad9f..4334d83 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -94,7 +94,7 @@ function HomeRoute() {
+   const { user, loading, setupRequired } = useAuth();
+   if (loading) return <p className="centered" role="status">Loading CivicSignal…</p>;
+   if (!user) return <LandingPage setupRequired={setupRequired} />;
+-  return <Protected><HomePage /></Protected>;
++  return <Protected><Navigate to="/map" replace /></Protected>;
+ }
+ 
+ export default function App() {
+@@ -111,6 +111,10 @@ export default function App() {
+           path="/"
+           element={<HomeRoute />}
+         />
++        <Route
++          path="/reports"
++          element={<Protected><HomePage /></Protected>}
++        />
+         <Route
+           path="/reports/new"
+           element={<ReportCreatePage />}
+diff --git a/src/components/Layout.tsx b/src/components/Layout.tsx
+index 0b2d2d2..8800211 100644
+--- a/src/components/Layout.tsx
++++ b/src/components/Layout.tsx
+@@ -40,8 +40,12 @@ export function Layout() {
+             ? { title: "Create an account", description: "Create a CivicSignal account to report non-emergency community issues and follow updates." }
+             : path === "/reports/new"
+               ? { title: "Report an issue", description: "Submit a non-emergency community issue to a configured organization." }
+-              : path === "/admin"
+-                ? { title: "Administration", description: "Manage CivicSignal accounts, organizations, issue categories, and moderation." }
++              : path === "/map"
++                ? { title: "Community map", description: "View reports available to your account on an interactive map." }
++                : path === "/reports"
++                  ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
++                  : path === "/admin"
++                    ? { title: "Administration", description: "Manage CivicSignal accounts, organizations, issue categories, and moderation." }
+                 : path === "/notifications"
+                   ? { title: "Notifications", description: "Review updates about your CivicSignal reports." }
+                   : path === "/profile"
+@@ -50,7 +54,7 @@ export function Layout() {
+                       ? { title: "Report details", description: "View the recorded status, official updates, and history for a CivicSignal report." }
+                       : user
+                         ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
+-                        : { title: "Congressional App Challenge Participant", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
++                        : { title: "Community reporting", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
+     document.title = `${page.title} · CivicSignal`;
+     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+     if (description) description.content = page.description;
+@@ -58,6 +62,7 @@ export function Layout() {
+ 
+   return (
+     <div className="app-shell">
++      <a className="skip-link" href="#main-content">Skip to main content</a>
+       <header className="topbar">
+         <div className="topbar-inner">
+           <Link to="/" className="brand">
+@@ -66,10 +71,10 @@ export function Layout() {
+           </Link>
+           {user ? (
+             <nav className="topnav" aria-label="Main navigation">
+-              <NavLink to="/" end>
++              <NavLink to="/map">Map</NavLink>
++              <NavLink to="/reports">
+                 {homeLabel}
+               </NavLink>
+-              <NavLink to="/map">Map</NavLink>
+               <NavLink to="/notifications">
+                 Notifications
+                 {unreadCount > 0 && (
+@@ -124,7 +129,7 @@ export function Layout() {
+         {flash && <div className="flash" role="status" aria-live="polite">{flash}</div>}
+         {signOutAction.error && <div className="error" role="alert">{signOutAction.error}</div>}
+       </div>
+-      <main className="content main-content">
++      <main id="main-content" className="content main-content" tabIndex={-1}>
+         <Outlet />
+       </main>
+       <footer className="footer">
+diff --git a/src/components/ReportMap.tsx b/src/components/ReportMap.tsx
+index 7aef254..e6ff3da 100644
+--- a/src/components/ReportMap.tsx
++++ b/src/components/ReportMap.tsx
+@@ -1,12 +1,11 @@
+ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+ import L from "leaflet";
+-import type { Report } from "../../shared/contracts";
++import { reportStatusLabel, type Report } from "../../shared/contracts";
+ 
+ interface ReportMapProps {
+   reports: Report[];
+   center?: { lat: number; lng: number };
+   zoom?: number;
+-  onReportClick?: (report: Report) => void;
+   filters?: {
+     status?: string[];
+     category?: string[];
+@@ -17,27 +16,59 @@ interface ReportMapProps {
+ 
+ // Status colors for map markers
+ const STATUS_COLORS: Record<string, string> = {
+-  SUBMITTED: "#ff6b6b",
+-  UNDER_REVIEW: "#ffd93d",
+-  IN_PROGRESS: "#6bcf7f",
+-  RESOLVED: "#4d96ff",
+-  CLOSED: "#8b8b8b",
++  SUBMITTED: "#385575",
++  UNDER_REVIEW: "#79520f",
++  IN_PROGRESS: "#285e7e",
++  RESOLVED: "#246147",
++  CLOSED: "#526057",
+ };
+ 
+ // Persistent problem indicator color
+-const PERSISTENT_COLOR = "#ff4757";
++const PERSISTENT_COLOR = "#a3312c";
++
++function mapElement<K extends keyof HTMLElementTagNameMap>(
++  tag: K,
++  text?: string,
++  className?: string,
++): HTMLElementTagNameMap[K] {
++  const node = document.createElement(tag);
++  if (text !== undefined) node.textContent = text;
++  if (className) node.className = className;
++  return node;
++}
++
++function clusterPopup(item: {
++  count: number;
++  reports: Report[];
++}): HTMLElement {
++  const root = mapElement("div", undefined, "map-popup cluster-popup");
++  root.append(mapElement("h3", `${item.count} reports in this area`));
++  const summary = item.reports.reduce<Record<string, number>>((counts, report) => {
++    counts[report.status] = (counts[report.status] || 0) + 1;
++    return counts;
++  }, {});
++  for (const [status, count] of Object.entries(summary)) {
++    const line = mapElement("p");
++    const dot = mapElement("span", undefined, "status-dot");
++    dot.style.background = STATUS_COLORS[status] ?? "#526057";
++    line.append(dot, document.createTextNode(`${reportStatusLabel(status as Report["status"])}: ${count}`));
++    root.append(line);
++  }
++  root.append(mapElement("p", "Select the cluster to zoom in.", "muted"));
++  return root;
++}
+ 
+ // Cluster configuration
+ const CLUSTER_RADIUS_PX = 60;
+ const CLUSTER_MAX_ZOOM = 16;
+ 
+-export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }: ReportMapProps) {
+-  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
++export function ReportMap({ reports, center, zoom = 13, filters }: ReportMapProps) {
+   const [hoveredReport, setHoveredReport] = useState<Report | null>(null);
+   const [currentZoom, setCurrentZoom] = useState(zoom);
+   const [showLegend, setShowLegend] = useState(true);
+   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+   const [isLocating, setIsLocating] = useState(false);
++  const [locationMessage, setLocationMessage] = useState("");
+   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+   const mapRef = useRef<L.Map | null>(null);
+   const markersRef = useRef<L.Layer[]>([]);
+@@ -123,10 +154,11 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+   // Get user location
+   const getUserLocation = useCallback(() => {
+     if (!navigator.geolocation) {
+-      alert("Geolocation is not supported by your browser");
++      setLocationMessage("This browser cannot share a location.");
+       return;
+     }
+ 
++    setLocationMessage("");
+     setIsLocating(true);
+     navigator.geolocation.getCurrentPosition(
+       (position) => {
+@@ -141,7 +173,11 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+       },
+       (error) => {
+         console.error("Geolocation error:", error);
+-        alert("Unable to retrieve your location");
++        setLocationMessage(
++          error.code === error.PERMISSION_DENIED
++            ? "Location permission is blocked. Allow it in browser settings to show your position."
++            : "Your location could not be read. Try again or use the report page to enter an address.",
++        );
+         setIsLocating(false);
+       },
+       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+@@ -218,24 +254,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+           map.setView([item.lat, item.lng], map.getZoom() + 2);
+         });
+ 
+-        // Add popup with summary
+-        const statusSummary = item.reports.reduce((acc, r) => {
+-          acc[r.status] = (acc[r.status] || 0) + 1;
+-          return acc;
+-        }, {} as Record<string, number>);
+-
+-        const popupContent = `
+-          <div class="map-popup cluster-popup">
+-            <h3>${item.count} reports in this area</h3>
+-            ${Object.entries(statusSummary).map(([status, count]) => `
+-              <p><span class="status-dot" style="background: ${STATUS_COLORS[status]}"></span>
+-              ${status}: ${count}</p>
+-            `).join("")}
+-            <p class="muted">Click to zoom in</p>
+-          </div>
+-        `;
+-
+-        marker.bindPopup(popupContent);
++        marker.bindPopup(clusterPopup(item));
+         markersRef.current.push(marker);
+       } else {
+         // Create individual report marker
+@@ -243,17 +262,20 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+         const statusColor = STATUS_COLORS[report.status] || "#ff6b6b";
+         const isPersistent = report.isPersistentProblem;
+ 
++        const reportHref = `/reports/${report.id}`;
+         const markerIcon = L.divIcon({
+           className: "report-marker-icon",
+           html: `
+-            <div class="report-marker-wrapper ${isPersistent ? 'persistent-problem' : ''}" style="border-color: ${statusColor}">
+-              ${report.attachments && report.attachments.length > 0
+-                ? `<img src="/api/reports/${report.id}/attachments/${report.attachments[0].id}" class="marker-image" />`
+-                : `<div class="marker-placeholder"></div>`
+-              }
+-              <div class="marker-status" style="background: ${statusColor}"></div>
+-              ${isPersistent ? `<div class="persistent-badge">!</div>` : ''}
+-            </div>
++            <a class="report-marker-link" href="${reportHref}" target="_blank" rel="noopener noreferrer" aria-label="Open this report in a new tab">
++              <div class="report-marker-wrapper ${isPersistent ? 'persistent-problem' : ''}" style="border-color: ${statusColor}">
++                ${report.attachments && report.attachments.length > 0
++                  ? `<img src="/api/reports/${report.id}/attachments/${report.attachments[0].id}" alt="" class="marker-image" />`
++                  : `<div class="marker-placeholder"></div>`
++                }
++                <div class="marker-status" style="background: ${statusColor}"></div>
++                ${isPersistent ? `<div class="persistent-badge">!</div>` : ''}
++              </div>
++            </a>
+           `,
+           iconSize: [48, 48],
+           iconAnchor: [24, 48],
+@@ -261,44 +283,12 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+ 
+         const marker = L.marker(
+           [report.coordinates!.latitude, report.coordinates!.longitude],
+-          { icon: markerIcon }
++          { icon: markerIcon, keyboard: false, title: "Open report in a new tab" }
+         ).addTo(map);
+ 
+-        // Add popup with report details
+-        const popupContent = `
+-          <div class="map-popup">
+-            <h3>${report.title}</h3>
+-            ${isPersistent ? `<p class="persistent-warning">Persistent problem (${report.relatedReportCount || 0} related reports)</p>` : ''}
+-            <p><strong>Status:</strong> <span class="status-badge" style="background: ${statusColor}">${report.status}</span></p>
+-            <p><strong>Location:</strong> ${report.location}</p>
+-            <p><strong>Submitted:</strong> ${new Date(report.submittedAt).toLocaleDateString()}</p>
+-            ${report.reporter ? `<p><strong>Reporter:</strong> ${report.reporter.displayName}</p>` : ""}
+-            ${report.category ? `<p><strong>Category:</strong> ${report.category.name}</p>` : ""}
+-            ${report.municipality ? `<p><strong>Municipality:</strong> ${report.municipality.name}</p>` : ""}
+-            <a href="/reports/${report.id}" target="_blank" class="view-link">View full report</a>
+-          </div>
+-        `;
+-
+-        marker.bindPopup(popupContent);
+-
+-        // Hover effect
+-        marker.on("mouseover", () => {
+-          setHoveredReport(report);
+-          marker.openPopup();
+-        });
+-
+-        marker.on("mouseout", () => {
+-          setHoveredReport(null);
+-          marker.closePopup();
+-        });
+-
+-        // Click to select
+-        marker.on("click", () => {
+-          setSelectedReport(report);
+-          if (onReportClick) {
+-            onReportClick(report);
+-          }
+-        });
++        // Hovering previews the report; clicking its image opens the report tab.
++        marker.on("mouseover", () => setHoveredReport(report));
++        marker.on("mouseout", () => setHoveredReport(null));
+ 
+         markersRef.current.push(marker);
+       }
+@@ -322,7 +312,7 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+       userLocationMarkerRef.current.remove();
+       userLocationMarkerRef.current = null;
+     }
+-  }, [clusteredReports, userLocation, onReportClick]);
++  }, [clusteredReports, userLocation]);
+ 
+   return (
+     <div className="map-container">
+@@ -383,6 +373,10 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+         </div>
+       )}
+ 
++      {locationMessage && (
++        <p className="map-location-message" role="status">{locationMessage}</p>
++      )}
++
+       {/* Stats panel */}
+       <div className="map-stats">
+         <h4>Showing {filteredReports.length} report{filteredReports.length !== 1 ? "s" : ""}</h4>
+@@ -401,57 +395,6 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+         </div>
+       )}
+ 
+-      {/* Selected report details */}
+-      {selectedReport && (
+-        <div className="map-details-panel">
+-          <button
+-            className="close-button"
+-            onClick={() => setSelectedReport(null)}
+-            aria-label="Close details"
+-          >
+-            ×
+-          </button>
+-          <h3>{selectedReport.title}</h3>
+-          {selectedReport.attachments && selectedReport.attachments.length > 0 && (
+-            <img
+-              src={`/api/reports/${selectedReport.id}/attachments/${selectedReport.attachments[0].id}`}
+-              alt={selectedReport.title}
+-              className="report-image"
+-            />
+-          )}
+-          <div className="report-meta">
+-            {selectedReport.isPersistentProblem && (
+-              <div className="persistent-problem-alert">
+-                <strong>Persistent Problem</strong>
+-                <p className="muted">This issue has been reported {selectedReport.relatedReportCount || 0} times by different residents at this location.</p>
+-              </div>
+-            )}
+-            <p><strong>Status:</strong> <span className="status-badge" style={{ background: STATUS_COLORS[selectedReport.status] }}>{selectedReport.status}</span></p>
+-            <p><strong>Description:</strong> {selectedReport.description}</p>
+-            <p><strong>Location:</strong> {selectedReport.location}</p>
+-            <p><strong>Submitted:</strong> {new Date(selectedReport.submittedAt).toLocaleString()}</p>
+-            {selectedReport.reporter && (
+-              <p><strong>Reporter:</strong> {selectedReport.reporter.displayName}</p>
+-            )}
+-            {selectedReport.category && (
+-              <p><strong>Category:</strong> {selectedReport.category.name}</p>
+-            )}
+-            {selectedReport.organization && (
+-              <p><strong>Organization:</strong> {selectedReport.organization.name}</p>
+-            )}
+-            {selectedReport.municipality && (
+-              <p><strong>Municipality:</strong> {selectedReport.municipality.name}</p>
+-            )}
+-            {selectedReport.reporterConfirmation && (
+-              <p><strong>Reporter Confirmation:</strong> {selectedReport.reporterConfirmation.replace(/_/g, " ")}</p>
+-            )}
+-          </div>
+-          <a href={`/reports/${selectedReport.id}`} className="button primary">
+-            View full report
+-          </a>
+-        </div>
+-      )}
+-
+       <style>{`
+         .map-container {
+           position: relative;
+@@ -495,23 +438,39 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+         }
+ 
+         .map-control-button {
+-          background: white;
+-          border: 1px solid #d0d7de;
++          min-height: 44px;
++          background: #fff;
++          border: 1px solid #cbd7d0;
+           border-radius: 6px;
+           padding: 8px 16px;
+           cursor: pointer;
+           font-size: 13px;
+-          font-weight: 500;
+-          color: #24292f;
+-          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+-          transition: all 0.15s ease;
++          font-weight: 650;
++          color: #292d28;
++          box-shadow: 0 1px 3px rgba(35,38,31,0.08);
++          transition: border-color 120ms ease, background-color 120ms ease;
+           white-space: nowrap;
+         }
+ 
++        .map-location-message {
++          position: absolute;
++          top: 10px;
++          left: 10px;
++          max-width: min(320px, calc(100% - 150px));
++          margin: 0;
++          padding: 8px 12px;
++          border: 1px solid #dfc58f;
++          border-radius: 6px;
++          background: #fbf1dc;
++          color: #553b12;
++          font-size: 13px;
++          z-index: 1000;
++        }
++
+         .map-control-button:hover:not(:disabled) {
+-          background: #f6f8fa;
+-          border-color: #babbbd;
+-          box-shadow: 0 1px 3px rgba(0,0,0,0.12);
++          background: #f1f6f2;
++          border-color: #416b58;
++          box-shadow: 0 1px 3px rgba(35,38,31,0.12);
+         }
+ 
+         .map-control-button:active:not(:disabled) {
+@@ -604,6 +563,19 @@ export function ReportMap({ reports, center, zoom = 13, onReportClick, filters }
+           background: transparent;
+         }
+ 
++        .report-marker-link {
++          display: block;
++          width: 48px;
++          height: 48px;
++          border-radius: 50%;
++          text-decoration: none;
++        }
++
++        .report-marker-link:focus-visible {
++          outline: 3px solid #1f4d3a;
++          outline-offset: 3px;
++        }
++
+         .report-marker-wrapper {
+           position: relative;
+           width: 48px;
+diff --git a/src/components/ReportTable.tsx b/src/components/ReportTable.tsx
+index b618c8a..96be716 100644
+--- a/src/components/ReportTable.tsx
++++ b/src/components/ReportTable.tsx
+@@ -17,9 +17,18 @@ export function ReportTable({ reports }: { reports: Report[] }) {
+                 <span>{report.location}</span>
+                 <span>{report.category.name} · {report.organization?.name ?? "Organization unavailable"}</span>
+               </span>
++              <span className="report-row-extra">
++                {report.assignedTo
++                  ? `Assigned to ${report.assignedTo.displayName}`
++                  : "Unassigned — no staff member has taken ownership"}
++                {report.latestUpdate ? ` · Latest update: ${report.latestUpdate.message}` : " · No official updates yet"}
++              </span>
+             </div>
+             <div className="report-row-meta">
+-              <StatusBadge status={report.status} />
++              <div className="report-row-badges">
++                <StatusBadge status={report.status} />
++                {report.followUpNeeded && <span className="attention-chip">Resident follow-up</span>}
++              </div>
+               <span className="muted">Updated {formatDate(report.updatedAt)}</span>
+             </div>
+           </Link>
+diff --git a/src/lib/report-guidance.ts b/src/lib/report-guidance.ts
+index 59062a3..6ea527b 100644
+--- a/src/lib/report-guidance.ts
++++ b/src/lib/report-guidance.ts
+@@ -31,13 +31,13 @@ export function reportGuidance(status: ReportStatus): ReportGuidance {
+       return {
+         heading: "The organization marked it resolved",
+         explanation: "This is the status recorded by the organization in CivicSignal; it is not an independent inspection.",
+-        residentAction: "A resident can mark this as still happening to return it for staff review.",
++        residentAction: "Mark this as still happening or not sure so staff can review whether to reopen it. Your feedback does not change the official status by itself.",
+       };
+     case "CLOSED":
+       return {
+         heading: "This report is closed",
+         explanation: "No further workflow step is currently open for this report. Its recorded updates and history remain on this page.",
+-        residentAction: "A resident can mark this as still happening to return it for staff review.",
++        residentAction: "Mark this as still happening or not sure so staff can review whether to reopen it. Your feedback does not change the official status by itself.",
+       };
+   }
+ }
+diff --git a/src/pages/AboutPage.tsx b/src/pages/AboutPage.tsx
+index a1028fc..42f66e1 100644
+--- a/src/pages/AboutPage.tsx
++++ b/src/pages/AboutPage.tsx
+@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
+ export function AboutPage() {
+   return (
+     <article className="card legal-page">
+-      <p className="eyebrow">Project overview · 2026 Congressional App Challenge, NJ-05</p>
++      <p className="eyebrow">Project overview</p>
+       <h1>About this civic app</h1>
+       <p className="muted">
+         This civic app helps solve community issues by making it easy to report non-emergency problems. A resident can submit a report to an organization configured for the selected category, then view the status and updates recorded in the app.
+@@ -14,23 +14,27 @@ export function AboutPage() {
+         The intended users are residents of a community whose deployment has configured receiving organizations, and the authorized staff who record report updates. The application does not identify a resident’s municipality or determine which agency has jurisdiction.
+       </p>
+ 
+-      <h2>Competition and service area</h2>
++      <h2>Service area and scope</h2>
+       <p>
+-        The NJ-05 label is the Congressional App Challenge district, not a claim that CivicSignal serves every town in that district. NJ-05 includes parts of Bergen, Passaic, and Sussex Counties. This app does not check congressional-district or municipal boundaries; any service area depends on the organizations configured by a deployment operator.
++        CivicSignal does not check municipal, county, or congressional-district boundaries. Any service area depends on
++        the organizations and categories configured by the deployment operator. A report goes only to the configured
++        organization connected to the category the resident chooses.
+       </p>
+ 
+       <h2>How it works</h2>
+       <ul>
+         <li><strong>Choose:</strong> The resident selects an active category. A deployment administrator has already connected that category to a receiving organization.</li>
+-        <li><strong>Submit:</strong> The current form requires a photo, location, and category. A guest can submit without creating an account and receives a private link to save.</li>
++        <li><strong>Submit:</strong> The form requires a title, description, location, and category. A photo is optional. A guest can submit without creating an account and receives a private link to save.</li>
+         <li><strong>Follow the history:</strong> Residents see the report status, recorded timeline, and updates entered by authorized accounts. Each event shows who acted and when.</li>
+         <li><strong>Get alerted:</strong> Account holders can opt in to phone or computer notifications for report activity on supported browsers.</li>
+         <li><strong>Understand the record:</strong> A status such as “Resolved” reflects what staff recorded in CivicSignal. It is not an independent inspection or proof that a public agency completed work.</li>
+       </ul>
+ 
+-      <h2>Automatic AI description</h2>
++      <h2>Optional AI suggestions</h2>
+       <p>
+-        When the deployment has configured Gemini photo analysis, the app automatically generates a description when a photo is selected. The AI also detects and blocks spam images. If photo analysis is unavailable, report details can be entered manually.
++        When the deployment has configured Gemini photo analysis, choosing a photo can produce an editable category,
++        title, and description suggestion. The resident can change every field or ignore the suggestion. The AI is not
++        required: reports can be submitted with text only, and the resident always chooses the final category.
+       </p>
+ 
+       <p>
+diff --git a/src/pages/AdminPage.tsx b/src/pages/AdminPage.tsx
+index 1e67a41..75b8a4d 100644
+--- a/src/pages/AdminPage.tsx
++++ b/src/pages/AdminPage.tsx
+@@ -77,6 +77,12 @@ function UsersPanel() {
+           className="card stack"
+           onSubmit={(event: FormEvent) => {
+             event.preventDefault();
++            if (
++              verifyForm.role === "ADMIN" &&
++              !window.confirm(`Grant full administrator access to ${verifying.displayName}? Administrators can verify officials, configure routing, and moderate reports.`)
++            ) {
++              return;
++            }
+             void perform(
+               () =>
+                 api.post(`/api/admin/users/${verifying.id}/verify`, {
+@@ -195,6 +201,12 @@ function UsersPanel() {
+                     className="button"
+                     disabled={busy}
+                     onClick={() => {
++                      if (
++                        user.status !== "SUSPENDED" &&
++                        !window.confirm(`Suspend ${user.displayName}? Their active sessions will be revoked.`)
++                      ) {
++                        return;
++                      }
+                       void perform(
+                         () =>
+                           api.post(`/api/admin/users/${user.id}/status`, {
+diff --git a/src/pages/HomePage.tsx b/src/pages/HomePage.tsx
+index 7667629..9fe5bec 100644
+--- a/src/pages/HomePage.tsx
++++ b/src/pages/HomePage.tsx
+@@ -15,6 +15,7 @@ import type {
+ function ResidentHome() {
+   const list = useFetch<ReportListResponse>("/api/reports?scope=mine");
+   const reports = list.data?.reports ?? [];
++  const needsFollowUp = reports.filter((report) => report.followUpNeeded);
+   const { loading, error } = list;
+ 
+   return (
+@@ -30,6 +31,21 @@ function ResidentHome() {
+           Report an issue
+         </Link>
+       </div>
++
++      {needsFollowUp.length > 0 && (
++        <section className="card follow-up-panel" aria-labelledby="resident-follow-up-title">
++          <div>
++            <p className="eyebrow">Needs your attention</p>
++            <h2 id="resident-follow-up-title">Is the problem still happening?</h2>
++            <p className="muted">
++              The organization marked {needsFollowUp.length === 1 ? "a report" : `${needsFollowUp.length} reports`} resolved or closed.
++              Your follow-up is recorded separately from the official status; staff decide whether to reopen work.
++            </p>
++          </div>
++          <ReportTable reports={needsFollowUp} />
++        </section>
++      )}
++
+       {error && (
+         <div className="error" role="alert">
+           <span>{error}</span>
+@@ -37,7 +53,7 @@ function ResidentHome() {
+         </div>
+       )}
+       {loading ? (
+-        <p className="centered">Loading…</p>
++        <p className="centered" role="status">Loading…</p>
+       ) : reports.length === 0 ? (
+         <div className="card empty">
+           <h2>No reports yet</h2>
+@@ -50,7 +66,13 @@ function ResidentHome() {
+           </Link>
+         </div>
+       ) : (
+-        <ReportTable reports={reports} />
++        <>
++          <div className="section-heading">
++            <h2>All your reports</h2>
++            <span className="muted">{reports.length} total</span>
++          </div>
++          <ReportTable reports={reports} />
++        </>
+       )}
+     </section>
+   );
+@@ -61,12 +83,16 @@ function StaffHome() {
+   const [categoryId, setCategoryId] = useState("");
+   const [search, setSearch] = useState("");
+   const [query, setQuery] = useState("");
++  const [assignment, setAssignment] = useState<"" | "mine" | "unassigned">("");
++  const [followUpOnly, setFollowUpOnly] = useState(false);
+   const { user } = useAuth();
+ 
+   const params = new URLSearchParams({ scope: "queue" });
+   if (status) params.set("status", status);
+   if (categoryId) params.set("categoryId", categoryId);
+   if (query) params.set("q", query);
++  if (assignment) params.set("assignment", assignment);
++  if (followUpOnly) params.set("followUp", "needs");
+   const list = useFetch<ReportListResponse>(`/api/reports?${params.toString()}`);
+   const categoryList = useFetch<{ categories: Category[] }>("/api/categories");
+   const impact = useFetch<{
+@@ -85,6 +111,14 @@ function StaffHome() {
+   const reports = list.data?.reports ?? [];
+   const total = list.data?.total ?? reports.length;
+   const { loading, error } = list;
++  const resetView = () => {
++    setStatus("");
++    setCategoryId("");
++    setSearch("");
++    setQuery("");
++    setAssignment("");
++    setFollowUpOnly(false);
++  };
+ 
+   return (
+     <section>
+@@ -98,8 +132,133 @@ function StaffHome() {
+         </div>
+       </div>
+ 
+-      <section className="card impact-panel" aria-labelledby="service-activity-title">
+-        <h2 id="service-activity-title">Service activity</h2>
++      <div className="queue-tools">
++        <div className="queue-view-switch" role="group" aria-label="Queue view">
++          <button
++            type="button"
++            className={`filter-chip${!assignment && !followUpOnly ? " active" : ""}`}
++            aria-pressed={!assignment && !followUpOnly}
++            onClick={() => { setAssignment(""); setFollowUpOnly(false); }}
++          >
++            All work
++          </button>
++          <button
++            type="button"
++            className={`filter-chip${followUpOnly ? " active" : ""}`}
++            aria-pressed={followUpOnly}
++            onClick={() => { setFollowUpOnly(true); setAssignment(""); setStatus("RESOLVED"); }}
++          >
++            Resident follow-up
++          </button>
++          <button
++            type="button"
++            className={`filter-chip${assignment === "mine" ? " active" : ""}`}
++            aria-pressed={assignment === "mine"}
++            onClick={() => { setAssignment("mine"); setFollowUpOnly(false); }}
++          >
++            Assigned to me
++          </button>
++          <button
++            type="button"
++            className={`filter-chip${assignment === "unassigned" ? " active" : ""}`}
++            aria-pressed={assignment === "unassigned"}
++            onClick={() => { setAssignment("unassigned"); setFollowUpOnly(false); }}
++          >
++            Unassigned
++          </button>
++        </div>
++
++        <form
++          className="filters"
++          onSubmit={(event: FormEvent) => {
++            event.preventDefault();
++            setQuery(search.trim());
++          }}
++        >
++          <Field label="Status" className="filter-field">
++            <select
++              className="select"
++              value={status}
++              onChange={(event) => setStatus(event.target.value)}
++            >
++              <option value="">All statuses</option>
++              <option value="SUBMITTED">Submitted</option>
++              <option value="UNDER_REVIEW">Under review</option>
++              <option value="IN_PROGRESS">In progress</option>
++              <option value="RESOLVED">Resolved</option>
++              <option value="CLOSED">Closed</option>
++            </select>
++          </Field>
++          <Field label="Category" className="filter-field">
++            <select
++              className="select"
++              value={categoryId}
++              onChange={(event) => setCategoryId(event.target.value)}
++            >
++              <option value="">All categories</option>
++              {categories.map((category) => (
++                <option key={category.id} value={category.id}>
++                  {category.name}
++                </option>
++              ))}
++            </select>
++          </Field>
++          <Field label="Search reports" className="filter-field search-field">
++            <input
++              className="input"
++              placeholder="Title, description, or reference"
++              value={search}
++              onChange={(event) => setSearch(event.target.value)}
++            />
++          </Field>
++          <button className="button" type="submit">
++            Search
++          </button>
++          {(status || categoryId || query || assignment || followUpOnly) && (
++            <button className="button" type="button" onClick={resetView}>
++              Clear filters
++            </button>
++          )}
++        </form>
++      </div>
++
++      {error && (
++        <div className="error" role="alert">
++          <span>{error}</span>
++          <button className="button" type="button" onClick={list.reload}>Try again</button>
++        </div>
++      )}
++      {categoryList.error && <p className="muted">Category filters could not be loaded.</p>}
++      {loading ? (
++        <p className="centered" role="status">Loading…</p>
++      ) : reports.length === 0 ? (
++        <div className="card empty">
++          <h2>No reports match this view</h2>
++          <p className="muted">
++            Try clearing the filters. New reports submitted by residents appear here automatically.
++          </p>
++        </div>
++      ) : (
++        <>
++          <div className="section-heading">
++            <h2>{followUpOnly ? "Resident follow-up" : assignment === "mine" ? "Assigned to you" : assignment === "unassigned" ? "Unassigned reports" : "Work queue"}</h2>
++            <span className="muted">{total} report{total === 1 ? "" : "s"}</span>
++          </div>
++          {followUpOnly && (
++            <p className="muted queue-guidance">
++              These reports are resolved or closed, but the resident said the problem is still happening or is unsure.
++              Resident feedback does not change the official status; review the report and decide whether to reopen work.
++            </p>
++          )}
++          <ReportTable reports={reports} />
++        </>
++      )}
++
++      <details className="card impact-panel">
++        <summary>
++          <span>Service activity</span>
++          <span className="muted">Recorded report measures for the last 30 days</span>
++        </summary>
+         {impact.error ? (
+           <div className="error" role="alert">
+             <span>{impact.error}</span>
+@@ -122,81 +281,7 @@ function StaffHome() {
+             <p className="impact-source">Source: {impact.data.source} “Possible repeat” means the same selected category and normalized location text; it is not a verified duplicate. Submitted reports and status measures are not independently verified damage or completed work.</p>
+           </>
+         )}
+-      </section>
+-
+-      <form
+-        className="filters"
+-        onSubmit={(event: FormEvent) => {
+-          event.preventDefault();
+-          setQuery(search.trim());
+-        }}
+-      >
+-        <Field label="Status" className="filter-field">
+-          <select
+-            className="select"
+-            value={status}
+-            onChange={(event) => setStatus(event.target.value)}
+-          >
+-            <option value="">All statuses</option>
+-            <option value="SUBMITTED">Submitted</option>
+-            <option value="UNDER_REVIEW">Under review</option>
+-            <option value="IN_PROGRESS">In progress</option>
+-            <option value="RESOLVED">Resolved</option>
+-            <option value="CLOSED">Closed</option>
+-          </select>
+-        </Field>
+-        <Field label="Category" className="filter-field">
+-          <select
+-            className="select"
+-            value={categoryId}
+-            onChange={(event) => setCategoryId(event.target.value)}
+-          >
+-            <option value="">All categories</option>
+-            {categories.map((category) => (
+-              <option key={category.id} value={category.id}>
+-                {category.name}
+-              </option>
+-            ))}
+-          </select>
+-        </Field>
+-        <Field label="Search reports" className="filter-field search-field">
+-          <input
+-            className="input"
+-            placeholder="Title, description, or reference"
+-            value={search}
+-            onChange={(event) => setSearch(event.target.value)}
+-          />
+-        </Field>
+-        <button className="button" type="submit">
+-          Search
+-        </button>
+-      </form>
+-
+-      {error && (
+-        <div className="error" role="alert">
+-          <span>{error}</span>
+-          <button className="button" type="button" onClick={list.reload}>Try again</button>
+-        </div>
+-      )}
+-      {categoryList.error && <p className="muted">Category filters could not be loaded.</p>}
+-      {loading ? (
+-        <p className="centered">Loading…</p>
+-      ) : reports.length === 0 ? (
+-        <div className="card empty">
+-          <h2>The queue is empty</h2>
+-          <p className="muted">
+-            No reports match these filters right now. New reports submitted by residents
+-            appear here automatically.
+-          </p>
+-        </div>
+-      ) : (
+-        <>
+-          <p className="muted">
+-            {total} report{total === 1 ? "" : "s"}
+-          </p>
+-          <ReportTable reports={reports} />
+-        </>
+-      )}
++      </details>
+     </section>
+   );
+ }
+@@ -211,10 +296,15 @@ function AdminHome() {
+   const overview = overviewFetch.data;
+   const reports = list.data?.reports ?? [];
+   const { loading } = list;
++  const setupIncomplete = overview && (
++    (overview.organizations ?? 0) === 0 ||
++    (overview.categories ?? 0) === 0 ||
++    (overview.pendingVerifications ?? 0) > 0
++  );
+ 
+   const cards = [
+-    { label: "Open reports", value: overview?.openReports },
+     { label: "Pending verifications", value: overview?.pendingVerifications },
++    { label: "Open reports", value: overview?.openReports },
+     { label: "Moderation queue", value: overview?.moderationQueue },
+     { label: "Users", value: overview?.users },
+     { label: "Organizations", value: overview?.organizations },
+@@ -235,6 +325,20 @@ function AdminHome() {
+           Open administration
+         </Link>
+       </div>
++
++      {setupIncomplete && (
++        <section className="card setup-checklist" aria-labelledby="setup-checklist-title">
++          <h2 id="setup-checklist-title">Setup and verification</h2>
++          <p className="muted">These checks come from live platform records, not sample data.</p>
++          <ul>
++            <li>{overview.organizations ? `✓ ${overview.organizations} organization${overview.organizations === 1 ? "" : "s"} configured` : "Add at least one active organization."}</li>
++            <li>{overview.categories ? `✓ ${overview.categories} categor${overview.categories === 1 ? "y" : "ies"} configured` : "Add at least one active category so residents can submit reports."}</li>
++            <li>{overview.pendingVerifications ? `${overview.pendingVerifications} account${overview.pendingVerifications === 1 ? "" : "s"} awaiting verification.` : "No accounts are awaiting verification."}</li>
++          </ul>
++          <Link className="button" to="/admin">Review setup</Link>
++        </section>
++      )}
++
+       <div className="stat-grid">
+         {cards.map((card) => (
+           <div key={card.label} className="stat-card">
+@@ -251,9 +355,12 @@ function AdminHome() {
+           </button>
+         </div>
+       )}
+-      <h2>All reports</h2>
++      <div className="section-heading">
++        <h2>Recent reports</h2>
++        <Link to="/admin">Review all</Link>
++      </div>
+       {loading ? (
+-        <p className="centered">Loading…</p>
++        <p className="centered" role="status">Loading…</p>
+       ) : reports.length === 0 ? (
+         <div className="card empty">
+           <h3>No reports have been submitted</h3>
+diff --git a/src/pages/LandingPage.tsx b/src/pages/LandingPage.tsx
+index 8daab40..8118b1e 100644
+--- a/src/pages/LandingPage.tsx
++++ b/src/pages/LandingPage.tsx
+@@ -61,7 +61,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
+     <section className="landing">
+       <div className="landing-hero">
+         <div className="landing-copy">
+-          <p className="eyebrow">Congressional App Challenge Participant</p>
++          <p className="eyebrow">Non-emergency community reporting</p>
+           <h1>Report a local issue. Follow its updates.</h1>
+           <p className="landing-lede">
+             Send a non-emergency report to an organization configured for this community. Come back here to see any updates its staff record.
+@@ -95,7 +95,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
+             <span className="landing-step-number">02</span>
+             <div>
+               <h3>Send the details</h3>
+-              <p>Submit a required photo and description, plus location. If enabled, an AI suggestion can help draft the description for you to review.</p>
++              <p>Add a description and location, with an optional photo. If enabled, an AI suggestion can help draft the category and description for you to review.</p>
+             </div>
+           </li>
+           <li>
+diff --git a/src/pages/MapPage.tsx b/src/pages/MapPage.tsx
+index f750e13..d64bedd 100644
+--- a/src/pages/MapPage.tsx
++++ b/src/pages/MapPage.tsx
+@@ -23,7 +23,6 @@ export function MapPage() {
+     timeRange: 30 as number, // days
+   });
+ 
+-  const [selectedReport, setSelectedReport] = useState<any>(null);
+   const [autoRefresh, setAutoRefresh] = useState(false);
+   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+   const [refreshInterval, setRefreshInterval] = useState(60); // seconds
+@@ -284,7 +283,6 @@ export function MapPage() {
+               <ReportMap
+                 reports={reportsWithCoords}
+                 filters={filters}
+-                onReportClick={setSelectedReport}
+               />
+             </>
+           )}
+@@ -333,11 +331,11 @@ export function MapPage() {
+         }
+ 
+         .sidebar-section {
+-          background: white;
++          background: #fff;
+           padding: 20px;
+           border-radius: 8px;
+-          border: 1px solid #e1e4e8;
+-          box-shadow: 0 1px 3px rgba(0,0,0,0.04);
++          border: 1px solid #d8d7ce;
++          box-shadow: 0 1px 3px rgba(35,38,31,0.04);
+         }
+ 
+         .sidebar-header {
+@@ -373,20 +371,20 @@ export function MapPage() {
+           padding: 8px 4px;
+           cursor: pointer;
+           font-size: 14px;
+-          color: #24292f;
++          color: #292d28;
+           transition: background-color 0.15s ease;
+           border-radius: 4px;
+         }
+ 
+         .filter-checkbox:hover {
+-          background-color: #f6f8fa;
++          background-color: #f6f4ed;
+         }
+ 
+         .filter-checkbox input[type="checkbox"] {
+           cursor: pointer;
+-          width: 16px;
+-          height: 16px;
+-          accent-color: #0969da;
++          width: 18px;
++          height: 18px;
++          accent-color: #416b58;
+         }
+ 
+         .filter-checkbox .status-dot {
+@@ -397,28 +395,28 @@ export function MapPage() {
+         }
+ 
+         .filter-checkbox .status-dot[data-status="SUBMITTED"] {
+-          background: #ff6b6b;
++          background: #385575;
+         }
+ 
+         .filter-checkbox .status-dot[data-status="UNDER_REVIEW"] {
+-          background: #ffd93d;
++          background: #79520f;
+         }
+ 
+         .filter-checkbox .status-dot[data-status="IN_PROGRESS"] {
+-          background: #6bcf7f;
++          background: #285e7e;
+         }
+ 
+         .filter-checkbox .status-dot[data-status="RESOLVED"] {
+-          background: #4d96ff;
++          background: #246147;
+         }
+ 
+         .filter-checkbox .status-dot[data-status="CLOSED"] {
+-          background: #8b8b8b;
++          background: #526057;
+         }
+ 
+         .filter-checkbox .count {
+           margin-left: auto;
+-          color: #888;
++          color: #676d63;
+           font-size: 12px;
+         }
+ 
+@@ -431,23 +429,23 @@ export function MapPage() {
+         .stat-item {
+           text-align: center;
+           padding: 16px 12px;
+-          background: #f6f8fa;
++          background: #f6f4ed;
+           border-radius: 6px;
+-          border: 1px solid #e1e4e8;
++          border: 1px solid #d8d7ce;
+         }
+ 
+         .stat-value {
+           display: block;
+           font-size: 28px;
+           font-weight: 600;
+-          color: #0969da;
++          color: #416b58;
+           line-height: 1.2;
+         }
+ 
+         .stat-label {
+           display: block;
+           font-size: 12px;
+-          color: #57606a;
++          color: #676d63;
+           margin-top: 4px;
+           font-weight: 500;
+           text-transform: uppercase;
+@@ -471,7 +469,7 @@ export function MapPage() {
+         .map-area .card.empty h2 {
+           margin: 0 0 12px 0;
+           font-size: 20px;
+-          color: #333;
++          color: #292d28;
+         }
+ 
+         .map-area .card.empty p {
+@@ -481,7 +479,7 @@ export function MapPage() {
+         }
+ 
+         .filter-summary {
+-          background: #e3f2fd;
++          background: #eaf3ee;
+           padding: 8px 12px;
+           border-radius: 6px;
+           margin-bottom: 12px;
+@@ -501,6 +499,24 @@ export function MapPage() {
+             order: 1;
+           }
+         }
++
++        @media (max-width: 760px) {
++          .map-page .page-header {
++            flex-direction: column;
++          }
++
++          .map-page .header-actions {
++            flex-wrap: wrap;
++          }
++
++          .map-page .header-actions .button {
++            flex: 1 1 145px;
++          }
++
++          .stats-grid {
++            grid-template-columns: 1fr;
++          }
++        }
+       `}</style>
+     </section>
+   );
+diff --git a/src/pages/ReportCreatePage.tsx b/src/pages/ReportCreatePage.tsx
+index ac2ad63..0e2cfd9 100644
+--- a/src/pages/ReportCreatePage.tsx
++++ b/src/pages/ReportCreatePage.tsx
+@@ -30,6 +30,14 @@ type LocationLookupInfo = {
+   policyUrl?: string;
+   usageNote?: string;
+ };
++type AiSuggestion = {
++  categoryId: string;
++  title: string;
++  description: string;
++  confidence: number;
++  problem: string;
++  detectedCues: string[];
++};
+ const emptyDraft: Draft = { categoryId: "", title: "", description: "", location: "", latitude: null, longitude: null };
+ 
+ function readDraft(key: string): Draft {
+@@ -53,6 +61,36 @@ function removeDraft(key: string): void {
+   void clearDraftPhoto(key);
+ }
+ 
++function RoutingNote({ source, confidence, categoryName, organizationName }: {
++  source: "AI" | "RESIDENT" | "AI_FALLBACK";
++  confidence?: number;
++  categoryName: string;
++  organizationName?: string | null;
++}) {
++  if (source === "AI") {
++    return (
++      <p className="routing-note" role="status">
++        <strong>AI suggestion used.</strong> {categoryName} is routed to {organizationName ?? "its configured organization"}.
++        {typeof confidence === "number" && confidence < 0.6 ? " Confidence was low, so staff should verify the category." : ""}
++        {" "}You can still change it before sending.
++      </p>
++    );
++  }
++  if (source === "AI_FALLBACK") {
++    return (
++      <p className="routing-note" role="status">
++        <strong>You chose the category.</strong> AI could not confidently classify the issue, so this report will be reviewed
++        with the category you selected. It routes to {organizationName ?? "the configured organization"}.
++      </p>
++    );
++  }
++  return (
++    <p className="routing-note" role="status">
++      <strong>You chose the category.</strong> This report routes to {organizationName ?? "the configured organization"}.
++    </p>
++  );
++}
++
+ export function ReportCreatePage() {
+   const navigate = useNavigate();
+   const { user, loading: authLoading } = useAuth();
+@@ -70,13 +108,16 @@ export function ReportCreatePage() {
+   const changingIdentity = !authLoading && loadedIdentity !== identity;
+   const [photo, setPhoto] = useState<File | null>(null);
+   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+-  const [photoError, setPhotoError] = useState<string | null>(null);
++  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
+   const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
++  const [analysisAttempted, setAnalysisAttempted] = useState(false);
++  const [aiSuggestion, setAiSuggestion] = useState<AiSuggestion | null>(null);
+   const [step, setStep] = useState<"details" | "confirm">("details");
+   const [locationMessage, setLocationMessage] = useState("");
+   const [locationLookupBusy, setLocationLookupBusy] = useState(false);
+   const [resolvingAddress, setResolvingAddress] = useState(false);
+   const [hasDraft, setHasDraft] = useState(false);
++  const [reviewError, setReviewError] = useState("");
+   const { data, loading: categoriesLoading, error: categoriesError, reload } =
+     useFetch<{ categories: Category[] }>("/api/categories");
+   const categories = data?.categories ?? [];
+@@ -84,47 +125,80 @@ export function ReportCreatePage() {
+   const { data: locationLookupInfo } = useFetch<LocationLookupInfo>("/api/location/attribution");
+   const { pending, error, fieldErrors, run } = useAction();
+ 
+-  function handlePhotoChange(file: File | null) {
++  function clearPhoto() {
+     photoAnalysisRequestId.current += 1;
+-    setPhoto(file);
+-    setPhotoError(null);
++    setPhoto(null);
++    setPhotoPreview(null);
++    setPhotoNotice(null);
+     setAnalyzingPhoto(false);
+-    setForm((current) => ({ ...current, categoryId: "" }));
+-    if (file) void saveDraftPhoto(draftKey, file);
+-    else void clearDraftPhoto(draftKey);
++    setAnalysisAttempted(false);
++    setAiSuggestion(null);
++    void clearDraftPhoto(draftKeyRef.current);
++  }
++
++  const acceptPhoto = useCallback((file: File | null) => {
++    photoAnalysisRequestId.current += 1;
++    setAnalysisAttempted(false);
++    setAiSuggestion(null);
++    setPhotoNotice(null);
++    setPhoto(file);
++    if (file) void saveDraftPhoto(draftKeyRef.current, file);
++    else void clearDraftPhoto(draftKeyRef.current);
++  }, []);
++
++  function selectPhoto(file: File | null, input: HTMLInputElement): void {
++    if (file && file.size > MAX_REPORT_PHOTO_BYTES) {
++      input.value = "";
++      acceptPhoto(null);
++      setPhotoNotice("Choose a photo that is 4 MiB or smaller. You can also send this report without a photo.");
++      return;
++    }
++    acceptPhoto(file);
+   }
+ 
+   const requestPhotoSuggestions = useCallback(async (file: File) => {
+     const requestId = ++photoAnalysisRequestId.current;
+     setAnalyzingPhoto(true);
++    setAnalysisAttempted(true);
++    setPhotoNotice(null);
+     try {
+       const payload = new FormData();
+       payload.set("photo", file);
+       const res = await api.postForm<{ analysis: PhotoAnalysisResult }>("/api/reports/analyze-photo", payload);
+       if (photoAnalysisRequestId.current !== requestId) return;
+       if (res.analysis.isSpam) {
+-        setPhotoError("This image appears to be spam and cannot be submitted. Please choose a real photo of a civic issue.");
++        setPhotoNotice("This image appears to be spam and cannot be submitted. Choose a real photo of a civic issue, or remove it and describe the problem in text.");
+         setPhoto(null);
+         setPhotoPreview(null);
++        setAnalysisAttempted(false);
++        setAiSuggestion(null);
+         void clearDraftPhoto(draftKeyRef.current);
+-        setForm((current) => ({ ...current, categoryId: "" }));
+         return;
+       }
+-      setForm((current) => ({
+-        ...current,
++      const suggestion: AiSuggestion = {
++        categoryId: res.analysis.suggestedCategoryId,
+         title: res.analysis.suggestedTitle,
+         description: res.analysis.suggestedDescription,
+-        categoryId: res.analysis.suggestedCategoryId,
++        confidence: res.analysis.confidence,
++        problem: res.analysis.problem,
++        detectedCues: res.analysis.detectedCues ?? [],
++      };
++      setAiSuggestion(suggestion);
++      setForm((current) => ({
++        ...current,
++        title: current.title.trim() ? current.title : suggestion.title,
++        description: current.description.trim() ? current.description : suggestion.description,
++        categoryId: current.categoryId || suggestion.categoryId,
+       }));
+-      if (!res.analysis.suggestedCategoryId) {
+-        setPhotoError("AI could not match this photo to an active issue category and organization. Choose another photo or try again later.");
++      if (!suggestion.categoryId) {
++        setPhotoNotice("AI could not match this photo to an active issue category. Choose the category that fits best; the report can still be submitted.");
+       }
+-    } catch (error) {
++    } catch (caught) {
+       if (photoAnalysisRequestId.current !== requestId) return;
+-      console.error("Photo analysis failed:", error);
+-      setPhotoError(error instanceof ApiRequestError
+-        ? error.message
+-        : "AI photo classification failed. Please try another photo or try again later.");
++      console.error("Photo analysis failed:", caught);
++      setPhotoNotice(caught instanceof ApiRequestError
++        ? `${caught.message} You can still submit this report by choosing a category and describing the problem.`
++        : "AI photo suggestions are unavailable. You can still submit this report by choosing a category and describing the problem.");
+     } finally {
+       if (photoAnalysisRequestId.current === requestId) setAnalyzingPhoto(false);
+     }
+@@ -158,21 +232,21 @@ export function ReportCreatePage() {
+           if (locationRequestId.current !== requestId) return;
+           setForm((current) => ({ ...current, location: address }));
+           setLocationMessage("Precise pin saved and nearby address found. Review both before sending.");
+-        }).catch((error: unknown) => {
++        }).catch((caught: unknown) => {
+           if (locationRequestId.current !== requestId) return;
+-          setLocationMessage(error instanceof ApiRequestError
+-            ? `The precise pin is saved. ${error.message}`
++          setLocationMessage(caught instanceof ApiRequestError
++            ? `The precise pin is saved. ${caught.message}`
+             : "The precise pin is saved. Address lookup is unavailable; you can still submit or add a street address.");
+         }).finally(() => {
+           if (locationRequestId.current === requestId) setResolvingAddress(false);
+         });
+       },
+-      (error) => {
++      (caught) => {
+         if (locationRequestId.current !== requestId) return;
+         setLocationLookupBusy(false);
+-        setLocationMessage(error.code === error.PERMISSION_DENIED
++        setLocationMessage(caught.code === caught.PERMISSION_DENIED
+           ? "Location access is blocked. Allow it in your browser or device settings, or enter the location manually."
+-          : error.code === error.TIMEOUT
++          : caught.code === caught.TIMEOUT
+             ? "Your device took too long to find its location. Try again outdoors or enter the location manually."
+             : "We couldn't read your device location. Check that location services are on, or enter the location manually.");
+       },
+@@ -194,13 +268,16 @@ export function ReportCreatePage() {
+     setForm(restored);
+     setPhoto(null);
+     setPhotoPreview(null);
+-    setPhotoError(null);
++    setPhotoNotice(null);
+     setAnalyzingPhoto(false);
++    setAnalysisAttempted(false);
++    setAiSuggestion(null);
+     setStep("details");
+     setLocationMessage("");
+     setLocationLookupBusy(false);
+     setResolvingAddress(false);
+     setHasDraft(false);
++    setReviewError("");
+     setDraftReady(true);
+ 
+     const selectionVersion = photoAnalysisRequestId.current;
+@@ -210,8 +287,8 @@ export function ReportCreatePage() {
+         activeIdentityRef.current !== identity ||
+         photoAnalysisRequestId.current !== selectionVersion
+       ) return;
+-      // A restored draft that already has an AI-selected category does not
+-      // need another provider call; reuse the saved classification.
++      // A restored draft that already has a category does not need another
++      // provider call; reuse the saved classification.
+       if (restored.categoryId) skipPhotoAnalysisFor.current = file;
+       setPhoto(file);
+     });
+@@ -238,13 +315,22 @@ export function ReportCreatePage() {
+     await run(async () => {
+       const payload = new FormData();
+       payload.set("categoryId", form.categoryId);
+-      payload.set("title", form.title);
+-      payload.set("description", form.description);
+-      payload.set("location", form.location);
++      payload.set("title", form.title.trim());
++      payload.set("description", form.description.trim());
++      payload.set("location", form.location.trim());
+       if (form.latitude !== null && form.longitude !== null) {
+         payload.set("latitude", String(form.latitude));
+         payload.set("longitude", String(form.longitude));
+       }
++      const routingSource = aiSuggestion && form.categoryId === aiSuggestion.categoryId
++        ? "AI"
++        : analysisAttempted && (!aiSuggestion || aiSuggestion.categoryId !== form.categoryId)
++          ? "AI_FALLBACK"
++          : "RESIDENT";
++      payload.set("routingSource", routingSource);
++      if (routingSource === "AI" && aiSuggestion) {
++        payload.set("routingConfidence", String(aiSuggestion.confidence));
++      }
+       if (photo) payload.set("photo", photo);
+ 
+       const guest = !user;
+@@ -278,10 +364,14 @@ export function ReportCreatePage() {
+     removeDraft(draftKey);
+     setForm(emptyDraft);
+     setPhoto(null);
+-    setPhotoError(null);
++    setPhotoPreview(null);
++    setPhotoNotice(null);
+     setAnalyzingPhoto(false);
++    setAnalysisAttempted(false);
++    setAiSuggestion(null);
+     setStep("details");
+     setHasDraft(false);
++    setReviewError("");
+   }
+ 
+   const chosenCategory = categories.find((category) => category.id === form.categoryId);
+@@ -293,6 +383,17 @@ export function ReportCreatePage() {
+   const mapUrl = hasPrecisePin
+     ? `https://www.openstreetmap.org/?mlat=${form.latitude}&mlon=${form.longitude}#map=18/${form.latitude}/${form.longitude}`
+     : null;
++  const routingSource = aiSuggestion && form.categoryId === aiSuggestion.categoryId
++    ? "AI"
++    : analysisAttempted && (!aiSuggestion || aiSuggestion.categoryId !== form.categoryId)
++      ? "AI_FALLBACK"
++      : "RESIDENT";
++  const detailsIncomplete =
++    form.title.trim().length < 4 ||
++    form.description.trim().length < 10 ||
++    !form.categoryId ||
++    (!form.location.trim() && !hasPrecisePin);
++  const photoBlocked = Boolean(photo) && photoStorageUnavailable;
+ 
+   useEffect(() => {
+     if (!photo || !photoAnalysisConfigured) return;
+@@ -321,7 +422,10 @@ export function ReportCreatePage() {
+         <div>
+           <p className="eyebrow">Non-emergency community report</p>
+           <h1>Report a local issue</h1>
+-          <p className="muted">A photo is required. AI identifies the issue category and responsible organization; enter a street address, intersection, or landmark.</p>
++          <p className="muted">
++            Describe the problem and choose the service that fits. A photo is optional. AI can suggest a category
++            when it is configured, but you decide what gets sent.
++          </p>
+         </div>
+         <span className="step-indicator" aria-label={step === "details" ? "Step 1 of 2" : "Step 2 of 2"}>
+           {step === "details" ? "1 of 2" : "2 of 2"}
+@@ -331,7 +435,7 @@ export function ReportCreatePage() {
+       <aside className="emergency-notice" role="note">
+         <strong>Not for emergencies.</strong> This civic app is not monitored for urgent situations. If someone is in immediate danger, call 911.
+       </aside>
+-      <p className="muted draft-note">Your draft, including the selected photo, is saved in this browser for this account or guest session. Use “Discard saved draft” to remove it.</p>
++      <p className="muted draft-note">Your draft, including any selected photo, is saved in this browser for this account or guest session. Use “Discard saved draft” to remove it.</p>
+ 
+       {categoriesError && (
+         <div className="error" role="alert">
+@@ -346,121 +450,137 @@ export function ReportCreatePage() {
+       )}
+       {routingReadiness?.jurisdiction?.status === "unavailable" && (
+         <p className="muted routing-limit" role="note">
+-          AI routes reports to the organization connected to its selected category. This deployment does not check municipality boundaries or infer a jurisdiction from your location.
++          Reports go to the organization connected to the category you choose. This deployment does not check
++          municipality boundaries or infer a jurisdiction from your location.
+         </p>
+       )}
+       {routingReadiness?.photoClassification?.status === "unavailable" && (
+         <p className="muted routing-limit" role="note">
+-          AI issue classification is required to route reports and is not configured here. You cannot submit a report right now.
++          AI photo suggestions are not configured here. You can still choose a category and submit the report.
+         </p>
+       )}
+       {photoStorageUnavailable && (
+         <p className="warning" role="status">
+-          Photo storage is temporarily unavailable. You can save your text draft and try again later.
++          Photo storage is temporarily unavailable. Remove any selected photo and send the report with text only,
++          or save your draft and try again later.
+         </p>
+       )}
+ 
+       <form onSubmit={submit} className="stack">
+         {step === "details" ? (
+           <>
+-            <div className="report-action-grid">
+-              <Field
+-                label="Photo (required)"
+-                hint="Maximum 4 MiB. When AI classification is configured, choosing a photo sends it to Gemini to identify the issue category and responsible organization. On submission, the photo is also shared with that organization and authorized staff. Avoid sensitive details."
+-                error={photoError ?? undefined}
+-              >
+-                <div className="photo-upload-section">
+-                  <label className={`photo-upload-button ${photo ? 'has-photo' : ''}`}>
+-                    <input
+-                      type="file"
+-                      accept="image/jpeg,image/png,image/webp,image/gif"
+-                      aria-label="Upload an issue photo (required)"
+-                      required
+-                      onChange={(event) => {
+-                        const file = event.currentTarget.files?.[0] ?? null;
+-                        if (file && file.size > MAX_REPORT_PHOTO_BYTES) {
+-                          photoAnalysisRequestId.current += 1;
+-                          event.currentTarget.value = "";
+-                          setPhoto(null);
+-                          setPhotoPreview(null);
+-                          void clearDraftPhoto(draftKey);
+-                          setPhotoError("Choose a photo that is 4 MiB or smaller.");
+-                          setAnalyzingPhoto(false);
+-                          return;
+-                        }
+-                        void handlePhotoChange(file);
+-                      }}
+-                    />
+-                    {photo ? `Change photo (${photo.name})` : "Upload photo"}
+-                  </label>
+-                  <label className="photo-upload-button">
+-                    <input
+-                      type="file"
+-                      accept="image/jpeg,image/png,image/webp,image/gif"
+-                      capture="environment"
+-                      aria-label="Take a photo with camera"
+-                      onChange={(event) => {
+-                        const file = event.currentTarget.files?.[0] ?? null;
+-                        if (file && file.size > MAX_REPORT_PHOTO_BYTES) {
+-                          photoAnalysisRequestId.current += 1;
+-                          event.currentTarget.value = "";
+-                          setPhoto(null);
+-                          setPhotoPreview(null);
+-                          void clearDraftPhoto(draftKey);
+-                          setPhotoError("Choose a photo that is 4 MiB or smaller.");
+-                          setAnalyzingPhoto(false);
+-                          return;
+-                        }
+-                        void handlePhotoChange(file);
+-                      }}
+-                    />
+-                    Take photo
+-                  </label>
++            <Field
++              label="Photo (optional)"
++              hint="Maximum 4 MiB. A photo can help staff understand the problem, but it is not required. When AI suggestions are configured, choosing a photo sends it to Gemini for a category suggestion. On submission, the photo is shared only with the receiving organization and authorized staff. Avoid sensitive details."
++              error={photoNotice ?? undefined}
++            >
++              <div className="photo-field-controls">
++              <div className="photo-upload-section">
++                <label className={`photo-upload-button${photo ? " has-photo" : ""}`}>
++                  <input
++                    className="photo-file-input"
++                    type="file"
++                    accept="image/jpeg,image/png,image/webp,image/gif"
++                    aria-label="Add an optional issue photo"
++                    onChange={(event) => selectPhoto(event.currentTarget.files?.[0] ?? null, event.currentTarget)}
++                  />
++                  <span>{photo ? `Change photo (${photo.name})` : "Add a photo"}</span>
++                </label>
++                <label className="photo-upload-button">
++                  <input
++                    className="photo-file-input"
++                    type="file"
++                    accept="image/jpeg,image/png,image/webp,image/gif"
++                    capture="environment"
++                    aria-label="Take an optional photo with camera"
++                    onChange={(event) => selectPhoto(event.currentTarget.files?.[0] ?? null, event.currentTarget)}
++                  />
++                  <span>Take photo</span>
++                </label>
++              </div>
++              {photo && (
++                <div className="photo-selected">
++                  {photoPreview && <img className="report-photo-preview" src={photoPreview} alt="Selected report photo" />}
++                  <button className="link-button" type="button" onClick={clearPhoto}>Remove photo</button>
+                 </div>
+-              </Field>
+-              <div className="location-action">
+-                <strong>Pin the exact place</strong>
+-                <p className="muted">Use your device location to save a precise GPS pin. We’ll also try to suggest a readable address, but the pin is kept even if that lookup fails.</p>
+-                <button className="button" type="button" onClick={updateLocationFromDevice} disabled={locationLookupBusy}>
+-                  {locationLookupBusy ? "Finding precise location…" : "Use my current location"}
+-                </button>
+-                {locationMessage && <p className="muted" role="status">{locationMessage}</p>}
+-                {resolvingAddress && <p className="muted" role="status">Looking up a nearby address. You can continue while this finishes.</p>}
+-                {hasPrecisePin && (
+-                  <div className="gps-pin-summary">
+-                    <span>GPS pin: {form.latitude!.toFixed(6)}, {form.longitude!.toFixed(6)}</span>
+-                    {mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer">Preview on map</a>}
+-                    <button className="link-button" type="button" onClick={() => {
+-                      locationRequestId.current += 1;
+-                      setForm((current) => ({
+-                        ...current,
+-                        location: current.location === "Precise GPS pin attached" ? "" : current.location,
+-                        latitude: null,
+-                        longitude: null,
+-                      }));
+-                      setResolvingAddress(false);
+-                      setLocationMessage("GPS pin removed. Enter an address, intersection, or landmark before continuing.");
+-                    }}>Remove pin</button>
+-                  </div>
+-                )}
+-                <p className="muted location-attribution">
+-                  The exact pin is shared with the organization and authorized staff that receive this report. Only the nearby-address lookup sends coordinates to {locationLookupInfo?.providerName ?? "the address lookup service"}; the returned address is editable. {locationLookupInfo?.usageNote}
+-                  {locationLookupInfo?.attribution && locationLookupInfo.attributionUrl && <> <a href={locationLookupInfo.attributionUrl} target="_blank" rel="noreferrer">{locationLookupInfo.attribution}</a>.</>}
+-                  {locationLookupInfo?.policyUrl && <> <a href={locationLookupInfo.policyUrl} target="_blank" rel="noreferrer">Lookup service policy</a>.</>}
+-                </p>
++              )}
+               </div>
+-            </div>
++            </Field>
+ 
+-            {analyzingPhoto && (
+-              <div className="card ai-card analyzing" role="status">
+-                <span>AI is identifying the issue and responsible organization…</span>
+-              </div>
+-            )}
+-            {chosenCategory && !analyzingPhoto && (
+-              <p className="muted" role="status">
+-                AI selected {chosenCategory.name}; this report will go to {chosenCategory.organizationName}.
++            <div className="location-action">
++              <strong>Pin the exact place</strong>
++              <p className="muted">Use your device location to save a precise GPS pin. We’ll also try to suggest a readable address, but the pin is kept even if that lookup fails.</p>
++              <button className="button" type="button" onClick={updateLocationFromDevice} disabled={locationLookupBusy}>
++                {locationLookupBusy ? "Finding precise location…" : "Use my current location"}
++              </button>
++              {locationMessage && <p className="muted" role="status">{locationMessage}</p>}
++              {resolvingAddress && <p className="muted" role="status">Looking up a nearby address. You can continue while this finishes.</p>}
++              {hasPrecisePin && (
++                <div className="gps-pin-summary">
++                  <span>GPS pin: {form.latitude!.toFixed(6)}, {form.longitude!.toFixed(6)}</span>
++                  {mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer">Preview on map</a>}
++                  <button className="link-button" type="button" onClick={() => {
++                    locationRequestId.current += 1;
++                    setForm((current) => ({
++                      ...current,
++                      location: current.location === "Precise GPS pin attached" ? "" : current.location,
++                      latitude: null,
++                      longitude: null,
++                    }));
++                    setResolvingAddress(false);
++                    setLocationMessage("GPS pin removed. Enter an address, intersection, or landmark before continuing.");
++                  }}>Remove pin</button>
++                </div>
++              )}
++              <p className="muted location-attribution">
++                The exact pin is shared with the organization and authorized staff that receive this report. Only the nearby-address lookup sends coordinates to {locationLookupInfo?.providerName ?? "the address lookup service"}; the returned address is editable. {locationLookupInfo?.usageNote}
++                {locationLookupInfo?.attribution && locationLookupInfo.attributionUrl && <> <a href={locationLookupInfo.attributionUrl} target="_blank" rel="noreferrer">{locationLookupInfo.attribution}</a>.</>}
++                {locationLookupInfo?.policyUrl && <> <a href={locationLookupInfo.policyUrl} target="_blank" rel="noreferrer">Lookup service policy</a>.</>}
+               </p>
+-            )}
++            </div>
++
++            <Field label="Report title" hint="A short summary helps staff scan the queue." error={fieldErrors.title}>
++              <input
++                className="input"
++                value={form.title}
++                placeholder="e.g. Deep pothole near the crosswalk"
++                onChange={(event) => setForm({ ...form, title: event.target.value })}
++                required
++                minLength={4}
++                maxLength={140}
++                autoComplete="off"
++              />
++            </Field>
++
++            <Field label="What is happening?" hint="Describe the problem, who it affects, and any details that would help a crew find it. Do not include personal information about other people." error={fieldErrors.description}>
++              <textarea
++                className="textarea"
++                rows={5}
++                value={form.description}
++                placeholder="e.g. The pothole is about two feet wide and fills with water. It is in the bike lane just north of the crosswalk."
++                onChange={(event) => setForm({ ...form, description: event.target.value })}
++                required
++                minLength={10}
++                maxLength={4000}
++              />
++            </Field>
++
++            <Field label="Issue category" hint="Choose the service that best matches the problem. The report goes to that category's configured organization." error={fieldErrors.categoryId}>
++              <select
++                className="select"
++                value={form.categoryId}
++                onChange={(event) => setForm({ ...form, categoryId: event.target.value })}
++                required
++                disabled={categoriesLoading}
++              >
++                <option value="">{categoriesLoading ? "Loading categories…" : "Choose a category…"}</option>
++                {categories.map((category) => (
++                  <option key={category.id} value={category.id}>
++                    {category.name}{category.organizationName ? ` — ${category.organizationName}` : ""}
++                  </option>
++                ))}
++              </select>
++            </Field>
+ 
+             <Field
+               label="Precise location"
+@@ -481,16 +601,50 @@ export function ReportCreatePage() {
+                 maxLength={300}
+               />
+             </Field>
++
++            {analyzingPhoto && (
++              <div className="card ai-card analyzing" role="status">
++                <span>AI is suggesting an issue category and organization…</span>
++              </div>
++            )}
++            {photoNotice && !analyzingPhoto && (
++              <p className="warning" role="status">{photoNotice}</p>
++            )}
++            {aiSuggestion && !analyzingPhoto && (
++              <div className="card ai-card">
++                <div className="ai-card-header">
++                  <span className="ai-badge">AI suggestion</span>
++                  <span className="ai-confidence">Confidence {Math.round(aiSuggestion.confidence * 100)}%</span>
++                </div>
++                <p className="ai-problem-text">{aiSuggestion.problem}</p>
++                {aiSuggestion.detectedCues.length > 0 && (
++                  <p className="muted ai-cues">Visible cues: {aiSuggestion.detectedCues.join(", ")}</p>
++                )}
++                <p className="muted">The form was filled only where you had not already entered text. Review and edit it before sending.</p>
++              </div>
++            )}
++
++            {chosenCategory && (
++              <RoutingNote
++                source={routingSource}
++                confidence={aiSuggestion?.confidence}
++                categoryName={chosenCategory.name}
++                organizationName={chosenCategory.organizationName}
++              />
++            )}
++
++            {reviewError && <p className="error" role="alert">{reviewError}</p>}
+             <div className="button-row">
+               <button
+                 className="button primary"
+                 type="button"
+-                disabled={!photo || analyzingPhoto || !form.categoryId || (!form.location && !hasPrecisePin) || coordinatesEntered || routingUnavailable || photoStorageUnavailable || categoriesLoading || Boolean(categoriesError) || !photoAnalysisConfigured}
+-                onClick={() => {
+-                  if (!photo) {
+-                    setPhotoError("A photo of the issue is required before continuing.");
++                disabled={analyzingPhoto || routingUnavailable || photoBlocked || categoriesLoading || Boolean(categoriesError)}
++                onClick={(event) => {
++                  if (!event.currentTarget.form?.reportValidity() || detailsIncomplete) {
++                    setReviewError("Add a title, a description, a category, and a location or GPS pin before reviewing the report.");
+                     return;
+                   }
++                  setReviewError("");
+                   setStep("confirm");
+                 }}
+               >
+@@ -503,31 +657,39 @@ export function ReportCreatePage() {
+           <>
+             <h2>Review before sending</h2>
+             <dl className="meta-grid report-confirmation">
+-              {photo && (
+-                <div>
+-                  <dt>Photo (Required)</dt>
+-                  <dd>
+-                    <img className="report-photo-preview" src={photoPreview ?? undefined} alt="Selected photo for this report" />
+-                    <span>{photo.name}</span>
+-                  </dd>
+-                </div>
+-              )}
+-              <div>
+-                <dt>Location</dt>
+-                <dd>{form.location}</dd>
+-              </div>
++              <div><dt>Title</dt><dd>{form.title}</dd></div>
++              <div><dt>Description</dt><dd className="description">{form.description}</dd></div>
++              <div><dt>Issue category</dt><dd>{chosenCategory?.name ?? "Not selected"}</dd></div>
++              <div><dt>Responsible organization</dt><dd>{chosenCategory?.organizationName ?? "Not selected"}</dd></div>
++              <div><dt>Location</dt><dd>{form.location}</dd></div>
+               {hasPrecisePin && (
+                 <div>
+                   <dt>Precise GPS pin</dt>
+                   <dd>{form.latitude!.toFixed(6)}, {form.longitude!.toFixed(6)} · {mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer">Preview map</a>}</dd>
+                 </div>
+               )}
+-              <div><dt>AI-selected issue type</dt><dd>{chosenCategory?.name ?? "Not classified"}</dd></div>
+-              <div><dt>AI-selected responsible organization</dt><dd>{chosenCategory?.organizationName ?? "Not classified"}</dd></div>
++              <div>
++                <dt>Photo</dt>
++                <dd>
++                  {photo ? (
++                    <>
++                      {photoPreview && <img className="report-photo-preview" src={photoPreview} alt="Selected report photo" />}
++                      <span>{photo.name}</span>
++                    </>
++                  ) : "No photo. Text-only reports are accepted."}
++                </dd>
++              </div>
+             </dl>
++            <RoutingNote
++              source={routingSource}
++              confidence={aiSuggestion?.confidence}
++              categoryName={chosenCategory?.name ?? "Selected category"}
++              organizationName={chosenCategory?.organizationName}
++            />
++            <p className="muted">This report is visible to the receiving organization and authorized staff. It is not a guarantee of a response time or an inspection.</p>
+             {error && <p className="error" role="alert">{error}</p>}
+             <div className="button-row">
+-              <button className="button primary" type="submit" disabled={pending || photoStorageUnavailable}>{pending ? "Sending report…" : "Submit report"}</button>
++              <button className="button primary" type="submit" disabled={pending || photoBlocked}>{pending ? "Sending report…" : "Submit report"}</button>
+               <button className="button" type="button" onClick={() => setStep("details")} disabled={pending}>Edit report</button>
+               <Link className="button" to="/">Cancel</Link>
+             </div>
+diff --git a/src/pages/ReportDetailPage.tsx b/src/pages/ReportDetailPage.tsx
+index 5c4ff98..1b5d077 100644
+--- a/src/pages/ReportDetailPage.tsx
++++ b/src/pages/ReportDetailPage.tsx
+@@ -21,6 +21,8 @@ const ACTION_LABELS: Record<string, string> = {
+   REPORT_STATUS_CHANGED: "Status changed",
+   REPORT_UPDATE_ADDED: "Official update posted",
+   REPORT_STILL_HAPPENING: "Resident follow-up received",
++  REPORTER_CONFIRMATION: "Resident confirmation received",
++  REPORT_TRANSFERRED: "Report transferred",
+   REPORT_MODERATED: "Moderation action",
+ };
+ 
+@@ -64,6 +66,11 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+   const [updateMessage, setUpdateMessage] = useState("");
+   const [handoffTo, setHandoffTo] = useState("");
+   const [handoffReason, setHandoffReason] = useState("");
++  const [transferCategoryId, setTransferCategoryId] = useState("");
++  const [transferReason, setTransferReason] = useState("");
++  const transferCategories = useFetch<{ categories: Array<{ id: string; name: string; organizationId?: string | null; organizationName?: string | null }> }>(
++    accountReport?.capabilities?.canTransfer ? "/api/categories" : null,
++  );
+ 
+   useEffect(() => {
+     if (!publicTracking || !reportId || !location.hash) return;
+@@ -143,6 +150,18 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+ 
+   const capabilities = report.capabilities ?? {};
+   const guidance = reportGuidance(report.status);
++  const canFollowUp = report.status === "RESOLVED" || report.status === "CLOSED";
++  const routing = report.routing;
++  const transferableCategories = (transferCategories.data?.categories ?? []).filter(
++    (category) => category.organizationId && category.organizationId !== report.organization?.id,
++  );
++  const routingText = !routing || routing.source === "LEGACY"
++    ? "This report was created before routing provenance was recorded."
++    : routing.source === "AI"
++      ? `AI suggested the category${routing.confidence !== null && routing.confidence !== undefined ? ` (${Math.round(routing.confidence * 100)}% confidence)` : ""}. A resident reviewed it before submission.`
++      : routing.source === "AI_FALLBACK"
++        ? "AI could not confidently classify the issue, so the resident chose the category manually."
++        : "The resident chose the category manually.";
+ 
+   return (
+     <section className="detail">
+@@ -219,10 +238,9 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+             <dd>{formatDateTime(report.submittedAt)}</dd>
+           </div>
+           <div>
+-            <dt>Municipal Representative</dt>
++            <dt>Assigned staff</dt>
+             <dd>
+-              {report.assignedTo?.displayName ?? report.nearestRepresentative?.displayName ?? "Municipal Staff"}
+-              {report.nearestRepresentative?.municipalityName ? ` (${report.nearestRepresentative.municipalityName})` : ""}
++              {report.assignedTo?.displayName ?? "Not yet claimed by the responsible organization"}
+             </dd>
+           </div>
+           <div>
+@@ -231,6 +249,8 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+           </div>
+         </dl>
+ 
++        <p className="routing-disclosure"><strong>How this was routed:</strong> {routingText}{routing?.reviewRequired ? " Staff should review the category." : ""}</p>
++
+         <h2>What was reported</h2>
+         <p className="description">{report.description || "No additional details were provided."}</p>
+ 
+@@ -246,57 +266,54 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+         )}
+ 
+         {(publicTracking || report.reporter?.id === user?.id) && (
+-          <div className="resident-follow-up">
+-            <h2>Current status confirmation</h2>
+-            <p className="muted">Your confirmation is recorded for staff to review. It does not reveal your location to other residents.</p>
+-            {report.reporterConfirmation ? (
+-              <div className="confirmation-display">
+-                <p><strong>You reported:</strong> {report.reporterConfirmation === "STILL_HAPPENING" ? "Still happening" : report.reporterConfirmation === "FIXED" ? "Fixed" : "Don't know"}</p>
+-                {report.reporterConfirmedAt && <p className="muted">Confirmed on {formatDateTime(report.reporterConfirmedAt)}</p>}
+-                <button
+-                  className="button"
+-                  disabled={busy}
+-                  onClick={() => {
+-                    const action = publicTracking && guestToken
+-                      ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
+-                      : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
+-                    void run(action, "Your follow-up was recorded for the responsible organization.");
+-                  }}
+-                >Update confirmation</button>
+-              </div>
++          <div className={`resident-follow-up${report.followUpNeeded ? " needs-attention" : ""}`}>
++            <h2>Resident follow-up</h2>
++            {canFollowUp ? (
++              <>
++                <p className="muted">Your feedback is recorded for staff to review. It is separate from the official status shown above and does not reveal your location to other residents.</p>
++                {report.followUpNeeded && (
++                  <p className="follow-up-alert" role="status">
++                    You reported that this is {report.reporterConfirmation === "STILL_HAPPENING" ? "still happening" : "still uncertain"}. The official status remains {reportStatusLabel(report.status)}; the responsible organization has been notified. Staff decide whether to reopen work.
++                  </p>
++                )}
++                {report.reporterConfirmation && (
++                  <p><strong>Your latest feedback:</strong> {report.reporterConfirmation === "STILL_HAPPENING" ? "Still happening" : report.reporterConfirmation === "FIXED" ? "Fixed" : "Don't know"}{report.reporterConfirmedAt ? ` · ${formatDateTime(report.reporterConfirmedAt)}` : ""}</p>
++                )}
++                <div className="confirmation-buttons">
++                  <button
++                    className="button"
++                    disabled={busy}
++                    onClick={() => {
++                      const action = publicTracking && guestToken
++                        ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
++                        : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
++                      void run(action, "Your follow-up was recorded. The official status was not changed.");
++                    }}
++                  >Still happening</button>
++                  <button
++                    className="button"
++                    disabled={busy}
++                    onClick={() => {
++                      const action = publicTracking && guestToken
++                        ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-fixed`, guestToken)
++                        : () => api.post<Report>(`/api/reports/${report.id}/confirm-fixed`);
++                      void run(action, "Your confirmation was recorded for the responsible organization.");
++                    }}
++                  >Confirm fixed</button>
++                  <button
++                    className="button"
++                    disabled={busy}
++                    onClick={() => {
++                      const action = publicTracking && guestToken
++                        ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-unknown`, guestToken)
++                        : () => api.post<Report>(`/api/reports/${report.id}/confirm-unknown`);
++                      void run(action, "Your confirmation was recorded for the responsible organization.");
++                    }}
++                  >Not sure</button>
++                </div>
++              </>
+             ) : (
+-              <div className="confirmation-buttons">
+-                <button
+-                  className="button"
+-                  disabled={busy}
+-                  onClick={() => {
+-                    const action = publicTracking && guestToken
+-                      ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
+-                      : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
+-                    void run(action, "Your confirmation was recorded for the responsible organization.");
+-                  }}
+-                >Still happening</button>
+-                <button
+-                  className="button"
+-                  disabled={busy}
+-                  onClick={() => {
+-                    const action = publicTracking && guestToken
+-                      ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-fixed`, guestToken)
+-                      : () => api.post<Report>(`/api/reports/${report.id}/confirm-fixed`);
+-                    void run(action, "Your confirmation was recorded for the responsible organization.");
+-                  }}
+-                >Fixed</button>
+-                <button
+-                  className="button"
+-                  disabled={busy}
+-                  onClick={() => {
+-                    const action = publicTracking && guestToken
+-                      ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-unknown`, guestToken)
+-                      : () => api.post<Report>(`/api/reports/${report.id}/confirm-unknown`);
+-                    void run(action, "Your confirmation was recorded for the responsible organization.");
+-                  }}
+-                >Don't know</button>
+-              </div>
++              <p className="muted">Follow-up becomes available after the organization marks this report resolved or closed. Until then, any official updates appear below.</p>
+             )}
+           </div>
+         )}
+@@ -313,6 +330,8 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+       {actionError && <p className="error">{actionError}</p>}
+ 
+       {(capabilities.canClaim ||
++        capabilities.canHandoff ||
++        capabilities.canTransfer ||
+         capabilities.canUpdateStatus ||
+         capabilities.canAddUpdate ||
+         capabilities.canModerate) && (
+@@ -374,6 +393,72 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?:
+               </div>
+             )}
+ 
++            {capabilities.canTransfer && (
++              <div className="action">
++                <h3>Transfer to another department</h3>
++                <p className="muted">
++                  Send this report to a different configured organization when another service is responsible.
++                  The report returns to the submitted stage, and the resident sees why it moved. Use this only after
++                  confirming the other department owns the issue.
++                </p>
++                {transferCategories.error && <p className="error" role="alert">{transferCategories.error}</p>}
++                <form
++                  className="stack"
++                  onSubmit={(event: FormEvent) => {
++                    event.preventDefault();
++                    void run(
++                      () => api.post<Report>(`/api/reports/${report.id}/transfer`, {
++                        categoryId: transferCategoryId,
++                        reason: transferReason,
++                      }),
++                      "The report was transferred to the receiving department.",
++                    );
++                  }}
++                >
++                  <Field label="Receiving category" error={actionFieldErrors.categoryId}>
++                    <select
++                      className="select"
++                      value={transferCategoryId}
++                      onChange={(event) => setTransferCategoryId(event.target.value)}
++                      required
++                      disabled={transferCategories.loading}
++                    >
++                      <option value="">
++                        {transferCategories.loading ? "Loading departments…" : "Choose a category and department…"}
++                      </option>
++                      {transferableCategories.map((category) => (
++                        <option key={category.id} value={category.id}>
++                          {category.name} — {category.organizationName ?? "Configured department"}
++                        </option>
++                      ))}
++                    </select>
++                  </Field>
++                  <Field label="Reason (shown in report history)" error={actionFieldErrors.reason}>
++                    <textarea
++                      className="textarea"
++                      rows={2}
++                      maxLength={500}
++                      value={transferReason}
++                      onChange={(event) => setTransferReason(event.target.value)}
++                      required
++                    />
++                  </Field>
++                  {!transferCategories.loading && transferableCategories.length === 0 && (
++                    <p className="warning" role="status">
++                      No other active category with a staffed organization is configured. An administrator must add one before a transfer is possible.
++                    </p>
++                  )}
++                  <button
++                    className="button"
++                    type="submit"
++                    disabled={busy || !transferCategoryId || transferReason.trim().length < 5 || transferableCategories.length === 0}
++                  >
++                    Transfer report
++                  </button>
++                </form>
++              </div>
++            )}
++
+             {capabilities.canUpdateStatus &&
+               (report.allowedTransitions ?? []).length > 0 && (
+                 <div className="action">
+diff --git a/src/pages/SignInPage.tsx b/src/pages/SignInPage.tsx
+index e7339d5..e0244d0 100644
+--- a/src/pages/SignInPage.tsx
++++ b/src/pages/SignInPage.tsx
+@@ -49,6 +49,7 @@ export function SignInPage() {
+           <input
+             className="input"
+             type="email"
++            autoComplete="email"
+             value={form.email}
+             onChange={(event) => setForm({ ...form, email: event.target.value })}
+             required
+@@ -58,6 +59,7 @@ export function SignInPage() {
+           <input
+             className="input"
+             type="password"
++            autoComplete="current-password"
+             value={form.password}
+             onChange={(event) => setForm({ ...form, password: event.target.value })}
+             required
+diff --git a/src/pages/TrustPages.tsx b/src/pages/TrustPages.tsx
+index cba90b1..394beed 100644
+--- a/src/pages/TrustPages.tsx
++++ b/src/pages/TrustPages.tsx
+@@ -13,8 +13,8 @@ export function PrivacyPage() {
+         <li>A session cookie in your browser; the server stores a hash of the session token and an expiry time.</li>
+         <li>Report issue type, summary and details, exact location, status history, official updates, and related notifications.</li>
+         <li>If you opt in to system alerts, the app stores this browser or device’s push endpoint and subscription keys on your account. Turn alerts off to remove that device’s subscription.</li>
+-        <li>A photo is required by the current report form. Your draft, including the selected photo, is stored in this browser for the current account or guest session until you discard it, submit the report, or change accounts. Drafts are not sent to the receiving organization until you submit.</li>
+-        <li>If Gemini photo analysis is configured, the selected photo is automatically sent to Google for description generation when you select it. The deployment operator's Google billing status controls Google's data-use terms. Do not send sensitive or confidential images; review <Link to="/terms">CivicSignal's eligibility terms</Link> and the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
++        <li>A photo is optional. Your draft, including any selected photo, is stored in this browser for the current account or guest session until you discard it, submit the report, or change accounts. Drafts are not sent to the receiving organization until you submit.</li>
++        <li>If Gemini photo analysis is configured, a selected photo is automatically sent to Google for an optional category and description suggestion. You can edit or ignore the suggestion. The deployment operator's Google billing status controls Google's data-use terms. Do not send sensitive or confidential images; review <Link to="/terms">CivicSignal's eligibility terms</Link> and the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
+         <li>If you save a GPS pin, its exact coordinates are stored with the report and shown to the authorized organization staff who receive it. The optional address lookup also sends the coordinates to the configured lookup provider. Its suggested address is editable, and a lookup failure does not remove the saved pin.</li>
+         <li>For a report sent without an account, a random secure tracking token is issued. The server stores only its hash. The link grants access to that report for 90 days.</li>
+       </ul>
+diff --git a/src/styles.css b/src/styles.css
+index 982bc9c..a232b9a 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -875,39 +875,51 @@ input[type="file"].input {
+ }
+ 
+ .photo-upload-button {
++  position: relative;
+   flex: 1;
+   min-width: 150px;
++  min-height: 48px;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   gap: 0.5rem;
+   padding: 0.75rem 1rem;
+-  border: 2px dashed var(--border);
++  border: 2px dashed var(--line);
+   border-radius: var(--radius);
+-  background: var(--bg);
+-  color: var(--text);
+-  font-weight: 500;
++  background: #fbfcfa;
++  color: var(--ink);
++  font-weight: 600;
+   cursor: pointer;
+-  transition: all 0.2s ease;
++  transition: border-color 120ms ease, background-color 120ms ease;
+ }
+ 
+ .photo-upload-button:hover {
+-  border-color: var(--primary);
+-  background: var(--bg-hover);
++  border-color: var(--forest-700);
++  background: #f1f6f2;
+ }
+ 
+-.photo-upload-button:active {
+-  transform: scale(0.98);
++.photo-upload-button.has-photo {
++  border-color: #9dbdad;
++  background: #eaf3ee;
++  color: var(--forest-950);
+ }
+ 
+-.photo-upload-button.has-photo {
+-  border-color: var(--success);
+-  background: var(--success-bg);
+-  color: var(--success);
++.photo-upload-button:focus-within {
++  outline: 3px solid var(--focus);
++  outline-offset: 2px;
+ }
+ 
+-.photo-upload-button input[type="file"] {
+-  display: none;
++.photo-file-input {
++  position: absolute;
++  width: 1px;
++  height: 1px;
++  margin: -1px;
++  padding: 0;
++  overflow: hidden;
++  clip: rect(0 0 0 0);
++  clip-path: inset(50%);
++  white-space: nowrap;
++  border: 0;
+ }
+ 
+ .input[aria-invalid="true"],
+@@ -1499,7 +1511,7 @@ input[type="file"].input {
+   margin: 1rem 0;
+   padding: 1rem 1.1rem;
+   border-color: #cbd9cf;
+-  background: linear-gradient(120deg, #f7fbf8, #fff);
++  background: #f7fbf8;
+ }
+ 
+ .push-preferences-copy {
+@@ -1823,3 +1835,289 @@ input[type="file"].input {
+   font-weight: 600;
+   color: var(--forest-950);
+ }
++
++.skip-link {
++  position: absolute;
++  top: -4rem;
++  left: 1rem;
++  z-index: 2000;
++  padding: 0.7rem 1rem;
++  border: 2px solid var(--forest-700);
++  border-radius: var(--radius);
++  background: var(--surface);
++  color: var(--forest-950);
++  font-weight: 700;
++  transition: top 120ms ease;
++}
++
++.skip-link:focus {
++  top: 1rem;
++}
++
++.section-heading {
++  display: flex;
++  align-items: baseline;
++  justify-content: space-between;
++  gap: 1rem;
++  margin: 1.6rem 0 0.4rem;
++}
++
++.section-heading h2 {
++  margin: 0;
++}
++
++.section-heading > .muted {
++  font-size: 0.86rem;
++}
++
++.report-row-extra {
++  display: -webkit-box;
++  overflow: hidden;
++  color: var(--muted);
++  font-size: 0.79rem;
++  line-height: 1.4;
++  -webkit-box-orient: vertical;
++  -webkit-line-clamp: 2;
++}
++
++.report-row-badges {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  flex-wrap: wrap;
++  gap: 0.35rem;
++}
++
++.attention-chip {
++  display: inline-flex;
++  min-height: 27px;
++  align-items: center;
++  padding: 0.2rem 0.6rem;
++  border: 1px solid #dfb56d;
++  border-radius: 999px;
++  background: #fdf3df;
++  color: #70490b;
++  font-size: 0.75rem;
++  font-weight: 720;
++  white-space: nowrap;
++}
++
++.follow-up-panel {
++  border-left: 4px solid #c68a1f;
++  background: #fffaf0;
++}
++
++.follow-up-panel h2 {
++  margin-top: 0.1rem;
++}
++
++.follow-up-panel .report-list {
++  margin-bottom: 0;
++}
++
++.queue-tools {
++  margin: 0.5rem 0 1rem;
++}
++
++.queue-view-switch {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 0.4rem;
++  margin-bottom: 0.65rem;
++}
++
++.filter-chip {
++  min-height: 44px;
++  padding: 0.45rem 0.85rem;
++  border: 1px solid #cbd7d0;
++  border-radius: 999px;
++  background: var(--surface);
++  color: #40554a;
++  cursor: pointer;
++  font-size: 0.87rem;
++  font-weight: 650;
++}
++
++.filter-chip:hover {
++  border-color: var(--forest-700);
++  background: #f4f8f5;
++}
++
++.filter-chip.active {
++  border-color: var(--forest-700);
++  background: var(--forest-700);
++  color: #fff;
++}
++
++.queue-guidance {
++  max-width: 78ch;
++  margin: 0 0 0.75rem;
++}
++
++details.impact-panel {
++  padding: 0;
++}
++
++.impact-panel > summary {
++  display: flex;
++  min-height: 58px;
++  align-items: baseline;
++  justify-content: space-between;
++  gap: 0.5rem 1rem;
++  flex-wrap: wrap;
++  padding: 1rem 1.4rem;
++  color: var(--forest-950);
++  font-weight: 700;
++}
++
++.impact-panel > summary .muted {
++  font-size: 0.82rem;
++  font-weight: 400;
++}
++
++.impact-panel[open] > summary {
++  border-bottom: 1px solid var(--line);
++}
++
++.impact-panel > :not(summary) {
++  margin-right: 1.4rem;
++  margin-left: 1.4rem;
++}
++
++.impact-panel > :last-child {
++  margin-bottom: 1.4rem;
++}
++
++.setup-checklist {
++  border-left: 4px solid var(--forest-700);
++}
++
++.setup-checklist h2 {
++  margin-top: 0;
++}
++
++.setup-checklist ul {
++  padding-left: 1.2rem;
++}
++
++.setup-checklist li + li {
++  margin-top: 0.35rem;
++}
++
++.routing-note,
++.routing-disclosure {
++  padding: 0.8rem 1rem;
++  border-left: 3px solid #8ea99a;
++  background: #f1f6f2;
++  color: #334c40;
++  font-size: 0.9rem;
++  line-height: 1.5;
++}
++
++.routing-note {
++  margin: 0;
++}
++
++.resident-follow-up.needs-attention {
++  padding: 1rem;
++  border: 1px solid #dfb56d;
++  border-radius: 9px;
++  background: #fffaf0;
++}
++
++.follow-up-alert {
++  padding: 0.7rem 0.85rem;
++  border-left: 3px solid #bd8219;
++  background: #fbf1dc;
++  color: #553b12;
++  font-weight: 620;
++}
++
++.confirmation-buttons {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 0.55rem;
++  margin-top: 0.65rem;
++}
++
++.photo-selected {
++  display: flex;
++  align-items: flex-end;
++  flex-wrap: wrap;
++  gap: 0.6rem;
++  margin-top: 0.6rem;
++}
++
++.photo-selected .link-button {
++  min-height: 44px;
++}
++
++.pill {
++  display: inline-flex;
++  min-height: 26px;
++  align-items: center;
++  padding: 0.15rem 0.55rem;
++  border: 1px solid #b9d4c3;
++  border-radius: 999px;
++  background: #e8f3ec;
++  color: #245d42;
++  font-size: 0.74rem;
++  font-weight: 720;
++  white-space: nowrap;
++}
++
++.topnav a {
++  min-height: 44px;
++}
++
++.link-button {
++  min-height: 44px;
++}
++
++.detail .back-link {
++  min-height: 44px;
++}
++
++.map-control-button {
++  min-height: 44px;
++}
++
++@media (max-width: 760px) {
++  .topnav {
++    flex-wrap: wrap;
++    overflow-x: visible;
++    row-gap: 0.1rem;
++    padding-bottom: 0.15rem;
++  }
++
++  .topnav > * {
++    flex: 0 0 auto;
++  }
++
++  .topnav a,
++  .topnav .link-button {
++    min-height: 44px;
++  }
++
++  .report-row-badges {
++    justify-content: flex-start;
++  }
++
++  .section-heading {
++    align-items: flex-start;
++    flex-direction: column;
++    gap: 0.15rem;
++  }
++}
++
++@media (max-width: 480px) {
++  .impact-panel > summary {
++    align-items: flex-start;
++    flex-direction: column;
++    gap: 0.15rem;
++  }
++
++  .filter-chip {
++    flex: 1 1 140px;
++  }
++}
+diff --git a/tests/api/guest-reports.api.test.ts b/tests/api/guest-reports.api.test.ts
+index 18b22f4..fb269ef 100644
+--- a/tests/api/guest-reports.api.test.ts
++++ b/tests/api/guest-reports.api.test.ts
+@@ -33,15 +33,18 @@ describe("guest reporting and secure follow-up", () => {
+     const created = await request(app)
+       .post("/api/reports/guest")
+       .field("categoryId", category.id)
++      .field("title", "Pothole at Main Street crossing")
++      .field("description", "A deep pothole is filling with water beside the crosswalk.")
+       .field("location", "Main Street and 4th Avenue")
+       .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "pothole.png", contentType: "image/png" })
+       .expect(201);
+ 
+     expect(created.body).toMatchObject({
+-      title: "Roads and Sidewalks issue",
+-      description: "",
++      title: "Pothole at Main Street crossing",
++      description: "A deep pothole is filling with water beside the crosswalk.",
+       reporter: { id: null, displayName: "Guest resident" },
+       status: "SUBMITTED",
++      assignedTo: null,
+     });
+     expect(created.body.organization.name).toBe("Public Works");
+     expect(created.body.guestAccessToken).toMatch(/^[A-Za-z0-9_-]{40,60}$/);
+@@ -53,9 +56,19 @@ describe("guest reporting and secure follow-up", () => {
+       .expect(200)
+       .expect(({ body }) => expect(body.referenceCode).toBe(created.body.referenceCode));
+ 
++    await request(app)
++      .post(`/api/reports/${created.body.id}/guest/still-happening`)
++      .set("X-Guest-Access", created.body.guestAccessToken)
++      .expect(409)
++      .expect(({ body }) => {
++        expect(body.error.code).toBe("FOLLOW_UP_NOT_AVAILABLE");
++      });
++
+     const other = await request(app)
+       .post("/api/reports/guest")
+       .field("categoryId", category.id)
++      .field("title", "Broken pavement on Oak Street")
++      .field("description", "Loose pavement is a trip hazard near the curb.")
+       .field("location", "Oak Street")
+       .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "road.png", contentType: "image/png" })
+       .expect(201);
+@@ -65,15 +78,40 @@ describe("guest reporting and secure follow-up", () => {
+       .expect(404);
+   });
+ 
+-  it("keeps guest photos private and records a resident still-happening confirmation", async () => {
++  it("keeps guest photos private and records follow-up without changing the official status", async () => {
+     const { app } = await testApplicationWithUploads();
+-    await setupAdministrator(app);
++    const admin = await setupAdministrator(app);
++    const { body: organizations } = await request(app).get("/api/organizations").expect(200);
++    const publicWorks = organizations.organizations.find(
++      (organization: { name: string }) => organization.name === "Public Works",
++    );
++    const official = request.agent(app);
++    await official.post("/api/auth/register").send({
++      displayName: "Guest Follow-up Official",
++      email: "guest-follow-up@example.test",
++      password: "a verified official password",
++      role: "OFFICIAL",
++      organizationId: publicWorks.id,
++    }).expect(201);
++    const { body: adminUsers } = await admin.get("/api/admin/users").expect(200);
++    const officialUser = adminUsers.users.find(
++      (user: { email: string }) => user.email === "guest-follow-up@example.test",
++    );
++    await admin.post(`/api/admin/users/${officialUser.id}/verify`).send({
++      role: "OFFICIAL",
++      organizationId: publicWorks.id,
++    }).expect(200);
++
+     const { body: catalog } = await request(app).get("/api/categories").expect(200);
+-    const category = catalog.categories[0];
++    const category = catalog.categories.find(
++      (item: { name: string }) => item.name === "Roads and Sidewalks",
++    );
+     const png = Buffer.from(PNG_BASE64, "base64");
+     const created = await request(app)
+       .post("/api/reports/guest")
+       .field("categoryId", category.id)
++      .field("title", "Broken fixture at the library entrance")
++      .field("description", "The entrance fixture is loose and could fall.")
+       .field("location", "Library entrance")
+       .attach("photo", png, { filename: "issue.png", contentType: "image/png" })
+       .expect(201);
+@@ -86,10 +124,23 @@ describe("guest reporting and secure follow-up", () => {
+       .expect(200);
+     expect(Buffer.compare(photo.body, png)).toBe(0);
+ 
++    await official.post(`/api/reports/${created.body.id}/claim`).expect(200);
++    for (const status of ["UNDER_REVIEW", "IN_PROGRESS", "RESOLVED"]) {
++      await official
++        .post(`/api/reports/${created.body.id}/status`)
++        .send({ status })
++        .expect(200);
++    }
++
+     const followedUp = await request(app)
+       .post(`/api/reports/${created.body.id}/guest/still-happening`)
+       .set("X-Guest-Access", created.body.guestAccessToken)
+       .expect(200);
++    expect(followedUp.body).toMatchObject({
++      status: "RESOLVED",
++      reporterConfirmation: "STILL_HAPPENING",
++      followUpNeeded: true,
++    });
+     expect(followedUp.body.timeline.some((event: { action: string }) => event.action === "REPORT_STILL_HAPPENING")).toBe(true);
+     await request(app)
+       .post(`/api/reports/${created.body.id}/guest/still-happening`)
+diff --git a/tests/api/reports.api.test.ts b/tests/api/reports.api.test.ts
+index 73543f7..26310c4 100644
+--- a/tests/api/reports.api.test.ts
++++ b/tests/api/reports.api.test.ts
+@@ -440,22 +440,45 @@ describe("report filtering", () => {
+   });
+ });
+ 
+-describe("photo required, AI problem detection, and deterministic municipal rep resolution", () => {
+-  it("requires a photo upload to create a report and returns 422 if omitted", async () => {
++describe("optional photos, AI problem detection, and configured category routing", () => {
++  it("accepts a text-only report and routes it only to the selected category's organization", async () => {
+     const { residentAgent, categories } = await scenario();
+     const roads = categoryByName(categories, "Roads and Sidewalks");
+ 
+-    const response = await residentAgent
++    const created = await residentAgent
+       .post("/api/reports")
+       .field("categoryId", roads.id)
+       .field("title", "Report without a photo")
+-      .field("description", "Testing photo required validation.")
++      .field("description", "The road surface is broken and needs an inspection.")
++      .field("location", "Main St and 1st Ave")
++      .expect(201);
++
++    expect(created.body).toMatchObject({
++      status: "SUBMITTED",
++      organization: { name: "Public Works" },
++      assignedTo: null,
++      attachments: [],
++      routing: { source: "RESIDENT", reviewRequired: false },
++    });
++    expect(created.body.nearestRepresentative).toBeUndefined();
++  });
++
++  it("protects required title and description fields", async () => {
++    const { residentAgent, categories } = await scenario();
++    const roads = categoryByName(categories, "Roads and Sidewalks");
++
++    const response = await residentAgent
++      .post("/api/reports")
++      .field("categoryId", roads.id)
++      .field("title", "")
++      .field("description", "short")
+       .field("location", "Main St and 1st Ave")
+       .expect(422);
+ 
+     expect(response.body.error.code).toBe("VALIDATION_ERROR");
+-    expect(response.body.error.message).toContain("photo of the issue is required");
+-    expect(response.body.error.fieldErrors.photo).toContain("A photo of the issue is required.");
++    expect(Object.keys(response.body.error.fieldErrors)).toEqual(
++      expect.arrayContaining(["title", "description"]),
++    );
+   });
+ 
+   it("detects the problem in an uploaded photo using AI logic via /api/reports/analyze-photo", async () => {
+@@ -538,10 +561,9 @@ describe("photo required, AI problem detection, and deterministic municipal rep
+     }));
+   });
+ 
+-  it("resolves the municipal representative using deterministic code (no AI)", async () => {
++  it("persists explicit AI routing provenance without inventing a representative", async () => {
+     const { residentAgent, categories } = await scenario();
+     const roads = categoryByName(categories, "Roads and Sidewalks");
+-    const png = Buffer.from(PNG_BASE64, "base64");
+ 
+     const created = await residentAgent
+       .post("/api/reports")
+@@ -549,22 +571,23 @@ describe("photo required, AI problem detection, and deterministic municipal rep
+       .field("title", "Broken asphalt near intersection")
+       .field("description", "Deep cracking on asphalt road.")
+       .field("location", "Main Street and First Avenue")
+-      .attach("photo", png, { filename: "road.png", contentType: "image/png" })
++      .field("routingSource", "AI")
++      .field("routingConfidence", "0.4")
+       .expect(201);
+ 
+-    expect(created.body.nearestRepresentative).toBeDefined();
+-    expect(created.body.nearestRepresentative.displayName).toBe("Olive Official");
+-    expect(created.body.nearestRepresentative.organizationName).toBe("Public Works");
+-    expect(created.body.nearestRepresentative.municipalityName).toBe("Springfield");
++    expect(created.body.organization).toMatchObject({ name: "Public Works" });
++    expect(created.body.assignedTo).toBeNull();
++    expect(created.body.routing).toEqual({
++      source: "AI",
++      confidence: 0.4,
++      reviewRequired: true,
++    });
++    expect(created.body.nearestRepresentative).toBeUndefined();
+ 
+     const detail = await residentAgent
+       .get(`/api/reports/${created.body.id}`)
+       .expect(200);
+-
+-    expect(detail.body.nearestRepresentative).toMatchObject({
+-      displayName: "Olive Official",
+-      organizationName: "Public Works",
+-      municipalityName: "Springfield",
+-    });
++    expect(detail.body.nearestRepresentative).toBeUndefined();
++    expect(detail.body.routing).toEqual(created.body.routing);
+   });
+ });
+diff --git a/tests/api/staff-handoff.api.test.ts b/tests/api/staff-handoff.api.test.ts
+index c1be1eb..23a1442 100644
+--- a/tests/api/staff-handoff.api.test.ts
++++ b/tests/api/staff-handoff.api.test.ts
+@@ -89,4 +89,93 @@ describe("verified staff report handoff", () => {
+       reason: "The next shift will continue the inspection.",
+     });
+   });
++
++  it("transfers a report to another configured department with audit and resident history", async () => {
++    const app = await testApplication();
++    const admin = await setupAdministrator(app);
++    const { body: organizations } = await request(app).get("/api/organizations").expect(200);
++    const publicWorks = organizations.organizations.find((item: { name: string }) => item.name === "Public Works");
++    const police = organizations.organizations.find((item: { kind: string }) => item.kind === "LAW_ENFORCEMENT");
++
++    async function verifiedStaff(displayName: string, email: string, organizationId: string) {
++      const agent = request.agent(app);
++      const role = organizationId === police.id ? "LAW_ENFORCEMENT" : "OFFICIAL";
++      await agent.post("/api/auth/register").send({
++        displayName,
++        email,
++        password: "a verified staff password",
++        role,
++        organizationId,
++      }).expect(201);
++      const { body } = await admin.get("/api/admin/users").expect(200);
++      const target = body.users.find((user: { email: string }) => user.email === email);
++      await admin.post(`/api/admin/users/${target.id}/verify`).send({ role, organizationId }).expect(200);
++      return { agent, id: target.id };
++    }
++
++    const publicWorksOfficial = await verifiedStaff("Olive Official", "olive-transfer@example.test", publicWorks.id);
++    const policeOfficial = await verifiedStaff("Parker Officer", "parker-transfer@example.test", police.id);
++    const resident = request.agent(app);
++    await resident.post("/api/auth/register").send({
++      displayName: "Rita Resident",
++      email: "rita-transfer@example.test",
++      password: "a resident account password",
++    }).expect(201);
++
++    const { body: catalog } = await request(app).get("/api/categories").expect(200);
++    const roads = catalog.categories.find((item: { name: string }) => item.name === "Roads and Sidewalks");
++    const streetlights = catalog.categories.find((item: { name: string }) => item.name === "Streetlights");
++    const safety = catalog.categories.find((item: { name: string }) => item.name === "Non-Emergency Public Safety");
++    const report = await resident
++      .post("/api/reports")
++      .field("categoryId", roads.id)
++      .field("title", "Abandoned vehicle blocking the lane")
++      .field("description", "A vehicle has been left in the travel lane for several days.")
++      .field("location", "Main Street near the library")
++      .expect(201);
++
++    await publicWorksOfficial.agent.post(`/api/reports/${report.body.id}/claim`).expect(200);
++    await publicWorksOfficial.agent.post(`/api/reports/${report.body.id}/transfer`).send({
++      categoryId: streetlights.id,
++      reason: "The same organization already handles this.",
++    }).expect(422);
++
++    const transferred = await publicWorksOfficial.agent.post(`/api/reports/${report.body.id}/transfer`).send({
++      categoryId: safety.id,
++      reason: "The vehicle is blocking a travel lane and needs law-enforcement review.",
++    }).expect(200);
++    expect(transferred.body).toMatchObject({
++      status: "SUBMITTED",
++      category: { name: "Non-Emergency Public Safety" },
++      organization: { name: "Police Department" },
++      assignedTo: null,
++    });
++    expect(transferred.body.timeline.some(
++      (event: { action: string }) => event.action === "REPORT_TRANSFERRED",
++    )).toBe(true);
++    expect(transferred.body.updates.at(-1).message).toContain("Police Department");
++
++    await publicWorksOfficial.agent.get(`/api/reports/${report.body.id}`).expect(404);
++    const policeQueue = await policeOfficial.agent.get("/api/reports?scope=queue").expect(200);
++    expect(policeQueue.body.reports.map((item: { id: string }) => item.id)).toContain(report.body.id);
++
++    const residentDetail = await resident.get(`/api/reports/${report.body.id}`).expect(200);
++    expect(residentDetail.body.organization.name).toBe("Police Department");
++    const residentTransferEvent = residentDetail.body.timeline.find(
++      (event: { action: string }) => event.action === "REPORT_TRANSFERRED",
++    );
++    expect(residentTransferEvent.message).toContain("reassigned to the responsible organization");
++    expect(residentTransferEvent.message).not.toContain("law-enforcement review");
++
++    const { body: audit } = await admin.get("/api/admin/audit?limit=50").expect(200);
++    const entry = audit.entries.find((item: { action: string; targetId: string }) =>
++      item.action === "REPORT_TRANSFERRED" && item.targetId === report.body.id,
++    );
++    expect(JSON.parse(entry.details)).toMatchObject({
++      fromOrganizationId: publicWorks.id,
++      toOrganizationId: police.id,
++      toCategoryId: safety.id,
++      reason: "The vehicle is blocking a travel lane and needs law-enforcement review.",
++    });
++  });
+ });
+-- 
+2.43.0
+

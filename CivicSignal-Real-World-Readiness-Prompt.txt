@@ -13,12 +13,6 @@ There are three distinct experiences:
 - Verified public-service and law-enforcement officials review authorized reports, take ownership, update statuses, and communicate progress.
 - Administrators configure organizations and categories, verify officials, moderate reports, and review audit history.
 
-Make the complete report lifecycle work end to end:
-- Use CivicSignal's built-in AI to determine the best configured department for a submitted report, using the report details and available jurisdiction/category information. Show the selected department and routing outcome clearly. If the AI cannot make a reliable selection, do not silently guess or discard the report; explain what needs attention and provide an appropriate review or fallback path.
-- Deliver routed reports to the authorized department workflow. An authorized official can claim ownership, hand the report off to another eligible official or department when appropriate, and post status changes and updates. Record who performed each action and when, and keep the handoff and status history visible to authorized users.
-- When an official marks an issue fixed/resolved, let the resident who submitted it respond from their account: the problem is solved, it is still persistent, or they are unsure. Keep this resident feedback distinct from the official status. Make persistent/uncertain feedback visible to the authorized workflow for follow-up; do not silently change the official status.
-- Give each resident an account view of all of their reports, current statuses, updates, status history, and any requested follow-up. Residents must be able to return to a report from their account without needing a saved one-off link. If they have enabled notifications, notify them about meaningful report updates and the official's fixed/resolved status; respect their notification preferences and show useful in-app notification state.
-
 This is not an emergency or dispatch service. Do not imply that reports are monitored continuously, guarantee response times, claim integrations that do not exist, or expose private resident or sensitive law-enforcement information.
 
 ## Start with the repository
@@ -39,9 +33,8 @@ Give the brand and page headers a clear hierarchy. Make the primary action obvio
 Pay special attention to these screens:
 - **Resident home:** make “Report an issue” the obvious next action. Present reports as readable, scannable items with reference, issue, location/category where available, current status, and last update. Make first-use empty state welcoming and helpful.
 - **Report form:** group fields in a sensible order, explain what information helps staff respond, clarify optional photo use and privacy, show validation beside the relevant field, and prevent accidental duplicate submissions while saving. Make the emergency limitation visible before submission.
-- **Report detail:** make reference code, status, location, responsible organization, and latest update easy to find. Show a legible progress/history timeline and official messages. Let the submitting resident provide the solved/persistent/unsure confirmation after an official marks the issue fixed, and show that feedback separately from the official status. Present actions only to authorized roles and make status changes and public-facing messages deliberate and clear.
-- **Official queue:** optimize for reviewing and acting on many reports, with useful search and filters, clear priority through information hierarchy (do not fabricate urgency), readable status, AI-selected department, ownership, and handoff history, and useful no-results/loading/error states. Make claiming and handing off reports clear and attributable. Keep key actions usable on narrow screens.
-- **Resident account and notifications:** make the resident's complete report list, report histories, current statuses, updates, and follow-up feedback available from their account. Make enabled notifications useful and consistent with in-app report history, and provide clear notification-preference controls.
+- **Report detail:** make reference code, status, location, responsible organization, and latest update easy to find. Show a legible progress/history timeline and official messages. Present actions only to authorized roles and make status changes and public-facing messages deliberate and clear.
+- **Official queue:** optimize for reviewing and acting on many reports, with useful search and filters, clear priority through information hierarchy (do not fabricate urgency), readable status and ownership, and useful no-results/loading/error states. Keep key actions usable on narrow screens.
 - **Admin:** keep verification, organization/category setup, moderation, and audit history organized and legible. Use responsive table alternatives or well-designed horizontal scrolling on mobile, clear destructive-action labeling, and confirmation for irreversible actions.
 - **Setup and sign-in/sign-up:** explain what each account type means, especially that official access requires administrator verification. Make the first administrator setup and account-pending/suspended states understandable and calm.
 
@@ -51,9 +44,6 @@ A polished page is not enough: verify that controls lead to real, persisted acti
 
 - Keep server-side authorization authoritative. Never rely on hidden buttons to protect data or official actions. Preserve separation among residents, verified officials, law enforcement, and administrators.
 - Ensure users can understand where a report goes. Use only configured categories and organizations; do not claim a department was notified unless the API confirms successful routing. If a required organization/category is missing or inactive, explain the problem plainly and give an appropriate next step rather than silently misrouting or discarding a report.
-- Integrate AI-assisted department selection with the actual report workflow rather than presenting it as decorative advice. Base routing only on configured departments and supported report/jurisdiction data, make the routing result visible, preserve a clear failure/review path, and ensure the backend persists and enforces the final department assignment.
-- Make official ownership, handoffs, status changes, and resident fixed-status feedback persistent, attributable, and visible in the appropriate report history. Enforce who can claim, hand off, update, and respond on the server; a resident's persistent/unsure feedback must trigger a clear follow-up signal without impersonating an official or silently rewriting the official status.
-- Keep each resident's reports and complete update history accessible from their signed-in account. Send report-update notifications only when the resident has enabled the relevant notification channel; handle delivery failures honestly and retain in-app history so notifications are not the only way to follow a report.
 - Preserve clear confirmation after report submission, including the reference code, and make it easy to return to the report later.
 - Handle pending verification, suspended accounts, inaccessible reports, expired sessions, network/API errors, validation errors, duplicate clicks, empty data, and slow loading with helpful UI. Retain form entries after recoverable errors.
 - Keep the emergency disclaimer visible and unambiguous. Avoid collecting unnecessary sensitive data. Do not expose a resident’s contact details or private reports to other residents. Treat uploaded images as untrusted input and preserve existing server-side validation and authorization.
@@ -67,12 +57,10 @@ A polished page is not enough: verify that controls lead to real, persisted acti
 Work through a real resident-to-official-to-resident journey using the app’s actual setup and APIs where feasible. Check at least:
 1. A clean first-run setup can create the administrator.
 2. A resident can sign up, sign in, submit a report, see its reference and status, and revisit it.
-3. AI routing selects a configured department for a report and clearly handles an unavailable/uncertain selection without silently misrouting it.
-4. An official account cannot act until verified; after verification it can see only its authorized workflow, claim or hand off a report, post an update, and advance allowed statuses with attributable history.
-5. After an official marks a report fixed/resolved, the resident can confirm solved, persistent, or unsure; persistent/unsure feedback is visible for authorized follow-up and does not erase the official status.
-6. The resident can revisit all of their reports and status/update history from their account, and receives enabled notifications for meaningful updates.
-7. An administrator can manage verification/configuration and view audit information.
-8. Unauthorized direct API calls remain denied.
+3. An official account cannot act until verified; after verification it can see only its authorized workflow, claim a report, post an update, and advance allowed statuses.
+4. The resident sees the resulting update/history and useful notification feedback.
+5. An administrator can manage verification/configuration and view audit information.
+6. Unauthorized direct API calls remain denied.
 
 Run the project’s relevant typecheck, tests, and production build after changes. Exercise responsive layouts and key interaction states in the browser when available. Fix issues introduced or uncovered by your work. Do not claim a check passed unless you actually ran it. Keep any setup instructions or required environment configuration accurate, and report any remaining real deployment dependency plainly.
 

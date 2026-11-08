@@ -49,6 +49,7 @@ export function SignInPage() {
           <input
             className="input"
             type="email"
+            autoComplete="email"
             value={form.email}
             onChange={(event) => setForm({ ...form, email: event.target.value })}
             required
@@ -58,6 +59,7 @@ export function SignInPage() {
           <input
             className="input"
             type="password"
+            autoComplete="current-password"
             value={form.password}
             onChange={(event) => setForm({ ...form, password: event.target.value })}
             required

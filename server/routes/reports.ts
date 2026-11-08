@@ -26,8 +26,7 @@ import {
   recordReportEvent,
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
-import { resolveMunicipalityRepresentative, routeReportToOrganization } from "../jurisdiction.js";
-import { findNearestStaff } from "../municipality-fallback.js";
+import { routeReportToOrganization } from "../jurisdiction.js";
 import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
 import {
   findSimilarReports,
@@ -72,6 +71,9 @@ const EVENT_TYPES: Record<string, string> = {
   REPORT_UPDATE_ADDED: "update",
   REPORT_CLAIMED: "assignment",
   REPORT_HANDED_OFF: "assignment",
+  REPORT_TRANSFERRED: "assignment",
+  REPORT_STILL_HAPPENING: "resident_feedback",
+  REPORTER_CONFIRMATION: "resident_feedback",
   REPORT_MODERATED: "moderation",
 };
 
@@ -118,6 +120,13 @@ type ReportRow = {
   reporter_confirmation: string | null;
   reporter_confirmed_at: number | null;
   first_attachment_id: string | null;
+  routing_source: "AI" | "RESIDENT" | "AI_FALLBACK" | "LEGACY" | null;
+  routing_confidence: number | null;
+  routing_review_required: number | boolean | null;
+  latest_update_id: string | null;
+  latest_update_message: string | null;
+  latest_update_created_at: number | null;
+  latest_update_author: string | null;
   similar_report_id?: string | null;
   similarity_score?: number | null;
 };
@@ -136,9 +145,23 @@ const REPORT_SELECT = `
          assignee.id AS assigned_user_id, assignee.display_name AS assigned_display_name,
          assignee.role AS assigned_role,
          reports.reporter_confirmation, reports.reporter_confirmed_at,
+         reports.routing_source, reports.routing_confidence, reports.routing_review_required,
          (SELECT attachments.id FROM attachments
           WHERE attachments.report_id = reports.id
-          ORDER BY attachments.created_at, attachments.id LIMIT 1) AS first_attachment_id
+          ORDER BY attachments.created_at, attachments.id LIMIT 1) AS first_attachment_id,
+         (SELECT report_updates.id FROM report_updates
+          WHERE report_updates.report_id = reports.id
+          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_id,
+         (SELECT report_updates.message FROM report_updates
+          WHERE report_updates.report_id = reports.id
+          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_message,
+         (SELECT report_updates.created_at FROM report_updates
+          WHERE report_updates.report_id = reports.id
+          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_created_at,
+         (SELECT users.display_name FROM report_updates
+          LEFT JOIN users ON users.id = report_updates.author_user_id
+          WHERE report_updates.report_id = reports.id
+          ORDER BY report_updates.created_at DESC, report_updates.id DESC LIMIT 1) AS latest_update_author
   FROM reports
   JOIN categories ON categories.id = reports.category_id
   JOIN organizations ON organizations.id = reports.organization_id
@@ -151,15 +174,22 @@ const coordinateSchema = z.preprocess(
   z.number().finite().optional(),
 );
 
+const routingConfidenceSchema = z.preprocess(
+  (value) => value === "" || value === null ? undefined : typeof value === "string" ? Number(value) : value,
+  z.number().min(0).max(1).optional(),
+);
+
 const createReportSchema = z.object({
   categoryId: z.string().trim().min(1),
   municipalityId: z.string().trim().optional(),
-  title: z.string().trim().max(140).optional().default(""),
-  description: z.string().trim().max(4000).optional().default(""),
+  title: z.string().trim().min(4, "Add a short title for the problem.").max(140),
+  description: z.string().trim().min(10, "Describe what is happening and where.").max(4000),
   location: z.string().trim().max(300).optional().default(""),
   latitude: coordinateSchema,
   longitude: coordinateSchema,
   accuracyMeters: coordinateSchema,
+  routingSource: z.enum(["AI", "RESIDENT", "AI_FALLBACK"]).optional().default("RESIDENT"),
+  routingConfidence: routingConfidenceSchema,
 }).superRefine((input, context) => {
   if ((input.latitude === undefined) !== (input.longitude === undefined)) {
     context.addIssue({ code: "custom", path: ["location"], message: "A complete GPS pin is required." });
@@ -190,6 +220,8 @@ const listQuerySchema = z.object({
   status: z.enum(REPORT_STATUSES).optional(),
   categoryId: z.string().trim().min(1).optional(),
   q: z.string().trim().max(200).optional(),
+  assignment: z.enum(["mine", "unassigned"]).optional(),
+  followUp: z.enum(["needs"]).optional(),
 });
 
 const impactQuerySchema = z.object({
@@ -203,6 +235,11 @@ const updateSchema = z.object({
 const handoffSchema = z.object({
   toUserId: z.string().trim().min(1),
   reason: z.string().trim().min(3).max(500),
+});
+
+const transferSchema = z.object({
+  categoryId: z.string().trim().min(1),
+  reason: z.string().trim().min(5).max(500),
 });
 
 const statusSchema = z.object({
@@ -260,6 +297,9 @@ function assertCanManage(
 }
 
 function serializeSummary(row: ReportRow) {
+  const followUpNeeded =
+    (row.status === "RESOLVED" || row.status === "CLOSED") &&
+    (row.reporter_confirmation === "STILL_HAPPENING" || row.reporter_confirmation === "DONT_KNOW");
   return {
     id: row.id,
     referenceCode: row.reference_code,
@@ -305,6 +345,22 @@ function serializeSummary(row: ReportRow) {
     updatedAt: isoTime(row.updated_at),
     reporterConfirmation: row.reporter_confirmation as "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null,
     reporterConfirmedAt: row.reporter_confirmed_at ? isoTime(row.reporter_confirmed_at) : null,
+    followUpNeeded,
+    routing: row.routing_source
+      ? {
+          source: row.routing_source,
+          confidence: row.routing_confidence,
+          reviewRequired: Boolean(row.routing_review_required),
+        }
+      : null,
+    latestUpdate: row.latest_update_id
+      ? {
+          id: row.latest_update_id,
+          message: row.latest_update_message ?? "",
+          createdAt: isoTime(row.latest_update_created_at ?? row.updated_at),
+          author: row.latest_update_author ? { displayName: row.latest_update_author } : null,
+        }
+      : null,
     attachments: row.first_attachment_id
       ? [{
           id: row.first_attachment_id,
@@ -376,12 +432,8 @@ async function serializeDetail(
 
   const staffScope =
     isStaffRole(user.role) && row.organization_id === user.organizationId;
-
-  const nearestRep = await resolveMunicipalityRepresentative(
-    database,
-    row.organization_id,
-    row.location,
-  );
+  const canReadStaffNotes = user.role === "ADMIN" || staffScope;
+  const internalAssignmentActions = new Set(["REPORT_HANDED_OFF", "REPORT_TRANSFERRED"]);
 
   // Check if this is a persistent problem
   let isPersistentProblem = false;
@@ -416,7 +468,9 @@ async function serializeDetail(
       id: event.id,
       type: EVENT_TYPES[event.action] ?? "event",
       action: event.action,
-      message: event.message,
+      message: !canReadStaffNotes && internalAssignmentActions.has(event.action)
+        ? "This report was reassigned to the responsible organization."
+        : event.message,
       fromStatus: event.from_status as ReportStatus | null,
       toStatus: event.to_status as ReportStatus | null,
       createdAt: isoTime(event.created_at),
@@ -433,19 +487,11 @@ async function serializeDetail(
     capabilities: {
       canClaim: staffScope && row.assigned_user_id === null,
       canHandoff: staffScope && row.assigned_user_id === user.id,
+      canTransfer: staffScope && row.assigned_user_id === user.id,
       canUpdateStatus: staffScope,
       canAddUpdate: staffScope,
       canModerate: user.role === "ADMIN",
     },
-    nearestRepresentative: nearestRep
-      ? {
-          id: nearestRep.id,
-          displayName: nearestRep.displayName,
-          role: nearestRep.role,
-          organizationName: nearestRep.organizationName,
-          municipalityName: nearestRep.municipalityName,
-        }
-      : null,
     isPersistentProblem,
     relatedReportCount,
   };
@@ -561,7 +607,7 @@ export function createReportsRouter(deps: {
       }
     }
 
-    // Route the report to the best organization based on municipality and location
+    // Route only to the configured organization for the selected category.
     const coordinates = input.latitude !== undefined && input.longitude !== undefined
       ? { latitude: input.latitude, longitude: input.longitude }
       : null;
@@ -586,7 +632,7 @@ export function createReportsRouter(deps: {
     // Override municipalityId with the routed municipality
     municipalityId = routing.municipalityId;
 
-    const title = input.title || `${category.name} issue`;
+    const title = input.title;
     const description = input.description;
     const location = input.location || "Precise GPS pin attached";
     const latitude = input.latitude ?? null;
@@ -595,36 +641,33 @@ export function createReportsRouter(deps: {
     const now = Date.now();
     const reportId = randomUUID();
     const file = request.file;
-    if (!file) {
-      throw new ApiError(
-        422,
-        "VALIDATION_ERROR",
-        "A photo of the issue is required.",
-        { photo: ["A photo of the issue is required."] },
-      );
-    }
-    const fileContentType = actualImageType(file.buffer);
-    if (!fileContentType || fileContentType !== file.mimetype.toLowerCase()) {
+    const fileContentType = file ? actualImageType(file.buffer) : null;
+    if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
       throw new ApiError(
         415,
         "INVALID_IMAGE_CONTENT",
         "The file contents do not match a supported image type.",
       );
     }
-    const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
+    const storedPhoto = file && fileContentType
+      ? await photos.save(file.buffer, file.originalname, fileContentType)
+      : null;
 
-    // Generate image embedding for similarity detection
-    const imageEmbedding = await generateImageEmbedding(file.buffer);
-
-    // Find similar reports
-    const similarReport = await findSimilarReports(
-      database,
-      reportId,
-      latitude,
-      longitude,
-      category.id,
-      imageEmbedding,
-    );
+    // Photo comparison is optional, and only runs when a photo was supplied.
+    const imageEmbedding = file ? await generateImageEmbedding(file.buffer) : null;
+    const similarReport = imageEmbedding
+      ? await findSimilarReports(
+          database,
+          reportId,
+          latitude,
+          longitude,
+          category.id,
+          imageEmbedding,
+        )
+      : null;
+    const routingReviewRequired =
+      input.routingSource === "AI_FALLBACK" ||
+      (input.routingSource === "AI" && (input.routingConfidence ?? 0) < 0.6);
 
     let referenceCode = "";
     let pushRecipients: string[] = [];
@@ -635,8 +678,9 @@ export function createReportsRouter(deps: {
           `INSERT INTO reports
             (id, reference_code, title, description, location, latitude, longitude, accuracy_meters, category_id,
              organization_id, municipality_id, reporter_user_id, assigned_user_id, status,
-             moderation_status, image_embedding, similar_report_id, similarity_score, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?)`,
+             moderation_status, image_embedding, similar_report_id, similarity_score,
+             routing_source, routing_confidence, routing_review_required, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           reportId,
@@ -651,9 +695,12 @@ export function createReportsRouter(deps: {
           category.organization_id,
           municipalityId,
           reporterUserId,
-          serializeEmbedding(imageEmbedding),
+          imageEmbedding ? serializeEmbedding(imageEmbedding) : null,
           similarReport?.similarReportId ?? null,
           similarReport?.similarityScore ?? null,
+          input.routingSource,
+          input.routingConfidence ?? null,
+          routingReviewRequired ? 1 : 0,
           now,
           now,
         );
@@ -675,7 +722,7 @@ export function createReportsRouter(deps: {
         message: title,
       });
 
-      if (file && storedPhoto) {
+      if (file && storedPhoto && fileContentType) {
         await database
           .prepare(
             `INSERT INTO attachments
@@ -687,7 +734,7 @@ export function createReportsRouter(deps: {
             reportId,
             file.originalname,
             storedPhoto.storedName,
-            fileContentType!,
+            fileContentType,
             file.size,
             now,
           );
@@ -699,42 +746,6 @@ export function createReportsRouter(deps: {
         title: `New report: ${title}`,
         message: `${referenceCode} was submitted to ${category.name} and needs review.`,
       }, true);
-
-      // Check if there are staff in the selected municipality, if not find nearest
-      if (municipalityId) {
-        const municipalityStaff = (await database
-          .prepare(
-            `SELECT users.id
-             FROM users
-             JOIN organizations ON organizations.id = users.organization_id
-             WHERE organizations.municipality_id = ?
-               AND users.status = 'ACTIVE'
-               AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
-             LIMIT 1`,
-          )
-          .get(municipalityId)) as { id: string } | undefined;
-
-        if (!municipalityStaff) {
-          // No staff in this municipality, find nearest staff
-          const coordinates = latitude !== null && longitude !== null
-            ? { latitude, longitude }
-            : null;
-          const nearestStaff = await findNearestStaff(database, coordinates, municipalityId);
-
-          if (nearestStaff) {
-            // Assign to nearest staff or create a notification
-            await createNotification(database, {
-              userId: nearestStaff.id,
-              reportId,
-              type: "MUNICIPALITY_FALLBACK",
-              title: `Nearest officer assignment: ${referenceCode}`,
-              message: `This report from municipality with no available staff has been routed to you as the nearest officer (${nearestStaff.distanceKm === Infinity ? 'no location data' : `${nearestStaff.distanceKm.toFixed(1)} km away`}).`,
-              deferPush: true,
-            });
-            pushRecipients.push(nearestStaff.id);
-          }
-        }
-      }
 
       // Check if this is a persistent problem and notify appropriate staff
       if (similarReport) {
@@ -801,66 +812,68 @@ export function createReportsRouter(deps: {
     }
   }
 
+  function assertFollowUpWindow(row: ReportRow): void {
+    if (row.status !== "RESOLVED" && row.status !== "CLOSED") {
+      throw new ApiError(
+        409,
+        "FOLLOW_UP_NOT_AVAILABLE",
+        "Resident follow-up is available after the organization marks the report resolved or closed.",
+      );
+    }
+  }
+
   async function recordStillHappening(row: ReportRow, actorUserId: string | null) {
-    const nextStatus = row.status === "RESOLVED" || row.status === "CLOSED"
-      ? "UNDER_REVIEW"
-      : row.status;
+    assertFollowUpWindow(row);
     const now = Date.now();
+    // Resident feedback is independent of the official status. It never rewinds
+    // the organization's recorded status; staff decide whether to reopen work.
     await database
-      .prepare("UPDATE reports SET status = ?, reporter_confirmation = 'STILL_HAPPENING', reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
-      .run(nextStatus, now, now, row.id);
+      .prepare("UPDATE reports SET reporter_confirmation = 'STILL_HAPPENING', reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
+      .run(now, now, row.id);
     await recordReportEvent(database, {
       reportId: row.id,
       actorUserId,
       action: "REPORT_STILL_HAPPENING",
-      fromStatus: row.status === nextStatus ? null : row.status,
-      toStatus: row.status === nextStatus ? null : nextStatus,
-      message: row.status === nextStatus
-        ? "A resident confirmed this issue is still happening."
-        : "A resident says this issue is still happening. The report was returned for staff review.",
+      message: "A resident reported that this issue is still happening.",
     });
     await recordAudit(database, {
       actorUserId,
       action: "REPORT_STILL_HAPPENING",
       targetType: "REPORT",
       targetId: row.id,
-      details: { referenceCode: row.reference_code, fromStatus: row.status, toStatus: nextStatus },
+      details: { referenceCode: row.reference_code, status: row.status },
     });
 
-    // If the report was resolved/closed, notify the staff who resolved it
-    if (row.status === "RESOLVED" || row.status === "CLOSED") {
-      let notifyUserId = row.assigned_user_id;
-      if (!notifyUserId) {
-        // Find who resolved it from timeline
-        const resolver = (await database
-          .prepare(
-            `SELECT actor_user_id
-             FROM report_events
-             WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status = 'RESOLVED'
-             ORDER BY created_at DESC
-             LIMIT 1`,
-          )
-          .get(row.id)) as { actor_user_id: string | null } | undefined;
-        notifyUserId = resolver?.actor_user_id ?? null;
-      }
+    let notifyUserId = row.assigned_user_id;
+    if (!notifyUserId) {
+      const resolver = (await database
+        .prepare(
+          `SELECT actor_user_id
+           FROM report_events
+           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status IN ('RESOLVED', 'CLOSED')
+           ORDER BY created_at DESC
+           LIMIT 1`,
+        )
+        .get(row.id)) as { actor_user_id: string | null } | undefined;
+      notifyUserId = resolver?.actor_user_id ?? null;
+    }
 
-      if (notifyUserId) {
-        await createNotification(database, {
-          userId: notifyUserId,
-          reportId: row.id,
-          type: "REPORT_STILL_HAPPENING",
-          title: `Problem persists: ${row.reference_code}`,
-          message: `A resident reports that "${row.title}" is still happening after being marked as ${row.status.toLowerCase()}. The report has been returned to UNDER_REVIEW.`,
-          metadata: { previousStatus: row.status },
-        });
-      }
+    if (notifyUserId) {
+      await createNotification(database, {
+        userId: notifyUserId,
+        reportId: row.id,
+        type: "REPORT_STILL_HAPPENING",
+        title: `Problem persists: ${row.reference_code}`,
+        message: `A resident reports that "${row.title}" is still happening after the report was marked ${row.status.toLowerCase()}. The official status has not changed; review whether follow-up is needed.`,
+        metadata: { previousStatus: row.status },
+      });
     }
 
     await notifyOrganization(database, row.organization_id, {
       reportId: row.id,
       type: "REPORT_STILL_HAPPENING",
       title: `Resident follow-up: ${row.reference_code}`,
-      message: `A resident says “${row.title}” is still happening. Please review the report.`,
+      message: `A resident says “${row.title}” is still happening. The official status remains ${row.status.toLowerCase()}; review whether follow-up is needed.`,
     });
     const refreshed = await loadReport(database, row.id);
     return serializeDetail(database, refreshed, {
@@ -871,6 +884,7 @@ export function createReportsRouter(deps: {
   }
 
   async function recordConfirmation(row: ReportRow, confirmation: "FIXED" | "DONT_KNOW", actorUserId: string | null) {
+    assertFollowUpWindow(row);
     const now = Date.now();
     await database
       .prepare("UPDATE reports SET reporter_confirmation = ?, reporter_confirmed_at = ?, updated_at = ? WHERE id = ?")
@@ -893,13 +907,13 @@ export function createReportsRouter(deps: {
 
     // Notify the staff who handled this report
     let notifyUserId = row.assigned_user_id;
-    if (!notifyUserId && row.status === "RESOLVED") {
-      // If no assigned user but resolved, try to find who resolved it from timeline
+    if (!notifyUserId && (row.status === "RESOLVED" || row.status === "CLOSED")) {
+      // If no assigned user, try to find who recorded the completion from timeline.
       const resolver = (await database
         .prepare(
           `SELECT actor_user_id
            FROM report_events
-           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status = 'RESOLVED'
+           WHERE report_id = ? AND action = 'REPORT_STATUS_CHANGED' AND to_status IN ('RESOLVED', 'CLOSED')
            ORDER BY created_at DESC
            LIMIT 1`,
         )
@@ -984,6 +998,21 @@ export function createReportsRouter(deps: {
       );
       const pattern = `%${query.q.toLowerCase()}%`;
       parameters.push(pattern, pattern, pattern);
+    }
+    if (query.assignment) {
+      if (!isStaffRole(user.role)) {
+        throw new ApiError(403, "FORBIDDEN", "Your account does not have permission to perform this action.");
+      }
+      if (query.assignment === "mine") {
+        filters.push("reports.assigned_user_id = ?");
+        parameters.push(user.id);
+      } else {
+        filters.push("reports.assigned_user_id IS NULL");
+      }
+    }
+    if (query.followUp === "needs") {
+      filters.push("reports.status IN ('RESOLVED', 'CLOSED')");
+      filters.push("reports.reporter_confirmation IN ('STILL_HAPPENING', 'DONT_KNOW')");
     }
     const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
@@ -1076,7 +1105,7 @@ export function createReportsRouter(deps: {
         throw new ApiError(
           422,
           "VALIDATION_ERROR",
-          "A photo of the issue is required to create a report.",
+          "Upload or take a photo to analyze it.",
           { photo: ["Please upload or take a photo to analyze."] },
         );
       }
@@ -1435,6 +1464,155 @@ export function createReportsRouter(deps: {
         reportId: row.id,
       });
     }
+    response.json(await serializeDetail(database, await loadReport(database, row.id), user));
+  });
+
+  router.post("/:reportId/transfer", authenticate(database), requireStaff(), async (request, response) => {
+    const user = currentUser(request);
+    const input = transferSchema.parse(request.body);
+    const row = await loadReport(database, pathId(request, "reportId"));
+    assertCanView(row, user);
+    assertCanManage(row, user);
+    if (row.assigned_user_id !== user.id) {
+      throw new ApiError(409, "NOT_REPORT_OWNER", "Only the staff member currently handling this report can transfer it.");
+    }
+
+    const target = (await database
+      .prepare(
+        `SELECT categories.id, categories.name AS category_name,
+                organizations.id AS organization_id, organizations.name AS organization_name,
+                organizations.municipality_id, municipalities.name AS municipality_name
+         FROM categories
+         JOIN organizations ON organizations.id = categories.organization_id
+         LEFT JOIN municipalities ON municipalities.id = organizations.municipality_id
+         WHERE categories.id = ?
+           AND categories.active = 1
+           AND organizations.active = 1
+           AND (organizations.municipality_id IS NULL OR municipalities.active = 1)`,
+      )
+      .get(input.categoryId)) as
+      | {
+          id: string;
+          category_name: string;
+          organization_id: string;
+          organization_name: string;
+          municipality_id: string | null;
+          municipality_name: string | null;
+        }
+      | undefined;
+
+    if (!target || target.organization_id === row.organization_id) {
+      throw new ApiError(
+        422,
+        "INVALID_TRANSFER",
+        "Choose an active category handled by a different organization.",
+      );
+    }
+    const targetStaff = (await database
+      .prepare(
+        `SELECT id FROM users
+         WHERE organization_id = ? AND status = 'ACTIVE'
+           AND verified_at IS NOT NULL AND role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
+         LIMIT 1`,
+      )
+      .get(target.organization_id)) as { id: string } | undefined;
+    if (!targetStaff) {
+      throw new ApiError(
+        422,
+        "TARGET_UNAVAILABLE",
+        "That department has no active verified staff member to receive the report.",
+      );
+    }
+
+    const now = Date.now();
+    let pushRecipient: string | null = null;
+    await database.transaction(async () => {
+      const updated = await database
+        .prepare(
+          `UPDATE reports
+           SET category_id = ?, organization_id = ?, municipality_id = ?,
+               assigned_user_id = NULL, status = 'SUBMITTED', updated_at = ?
+           WHERE id = ? AND assigned_user_id = ?
+           RETURNING id`,
+        )
+        .get(
+          target.id,
+          target.organization_id,
+          target.municipality_id,
+          now,
+          row.id,
+          user.id,
+        ) as { id: string } | undefined;
+      if (!updated) {
+        throw new ApiError(
+          409,
+          "REPORT_OWNERSHIP_CHANGED",
+          "Another staff member changed ownership. Reload the report and try again.",
+        );
+      }
+
+      await recordReportEvent(database, {
+        reportId: row.id,
+        actorUserId: user.id,
+        action: "REPORT_TRANSFERRED",
+        fromStatus: row.status,
+        toStatus: "SUBMITTED",
+        message: `Transferred to ${target.organization_name} (${target.category_name}). Reason: ${input.reason}`,
+      });
+      const residentMessage =
+        `Your report was transferred to ${target.organization_name} so the right team can review it. ` +
+        "The report is back in the submitted stage while the receiving department reviews it.";
+      await database
+        .prepare(
+          `INSERT INTO report_updates (id, report_id, author_user_id, message, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(randomUUID(), row.id, user.id, residentMessage, now);
+      await recordReportEvent(database, {
+        reportId: row.id,
+        actorUserId: user.id,
+        action: "REPORT_UPDATE_ADDED",
+        message: residentMessage,
+      });
+
+      pushRecipient = await notifyReporterOfReport(
+        database,
+        row,
+        "REPORT_TRANSFERRED",
+        `Your report was transferred to ${target.organization_name}`,
+        residentMessage,
+        true,
+      );
+      await notifyOrganization(database, target.organization_id, {
+        reportId: row.id,
+        type: "REPORT_TRANSFERRED",
+        title: `Transferred report: ${row.reference_code}`,
+        message: `${row.reference_code} was transferred to ${target.organization_name} for review.`,
+      }, true);
+      await recordAudit(database, {
+        actorUserId: user.id,
+        action: "REPORT_TRANSFERRED",
+        targetType: "REPORT",
+        targetId: row.id,
+        details: {
+          referenceCode: row.reference_code,
+          fromOrganizationId: row.organization_id,
+          fromCategoryId: row.category_id,
+          toOrganizationId: target.organization_id,
+          toCategoryId: target.id,
+          reason: input.reason,
+        },
+      });
+    });
+
+    if (pushRecipient) {
+      await sendWebPushToUser(database, pushRecipient, {
+        title: `Your report was transferred to ${target.organization_name}`,
+        message: "The receiving department will review it. Track the current status from your account.",
+        reportId: row.id,
+      });
+    }
+
     response.json(await serializeDetail(database, await loadReport(database, row.id), user));
   });
 

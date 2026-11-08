@@ -58,6 +58,10 @@ export function createApp(options: AppOptions) {
           connectSrc: ["'self'"],
         },
       },
+      // OpenStreetMap's volunteer tile servers require a referrer. Sending
+      // only the origin cross-site keeps report URLs private while letting the
+      // map load tiles.
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
     }),
   );
   app.use(compression());

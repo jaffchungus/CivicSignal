@@ -40,8 +40,12 @@ export function Layout() {
             ? { title: "Create an account", description: "Create a CivicSignal account to report non-emergency community issues and follow updates." }
             : path === "/reports/new"
               ? { title: "Report an issue", description: "Submit a non-emergency community issue to a configured organization." }
-              : path === "/admin"
-                ? { title: "Administration", description: "Manage CivicSignal accounts, organizations, issue categories, and moderation." }
+              : path === "/map"
+                ? { title: "Community map", description: "View reports available to your account on an interactive map." }
+                : path === "/reports"
+                  ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
+                  : path === "/admin"
+                    ? { title: "Administration", description: "Manage CivicSignal accounts, organizations, issue categories, and moderation." }
                 : path === "/notifications"
                   ? { title: "Notifications", description: "Review updates about your CivicSignal reports." }
                   : path === "/profile"
@@ -50,7 +54,7 @@ export function Layout() {
                       ? { title: "Report details", description: "View the recorded status, official updates, and history for a CivicSignal report." }
                       : user
                         ? { title: homeLabel, description: "Track community reports and recorded responses in CivicSignal." }
-                        : { title: "Congressional App Challenge Participant", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
+                        : { title: "Community reporting", description: "Submit a non-emergency issue to a configured organization and follow the status recorded in CivicSignal." };
     document.title = `${page.title} · CivicSignal`;
     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
     if (description) description.content = page.description;
@@ -58,6 +62,7 @@ export function Layout() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">Skip to main content</a>
       <header className="topbar">
         <div className="topbar-inner">
           <Link to="/" className="brand">
@@ -66,10 +71,10 @@ export function Layout() {
           </Link>
           {user ? (
             <nav className="topnav" aria-label="Main navigation">
-              <NavLink to="/" end>
+              <NavLink to="/map">Map</NavLink>
+              <NavLink to="/reports">
                 {homeLabel}
               </NavLink>
-              <NavLink to="/map">Map</NavLink>
               <NavLink to="/notifications">
                 Notifications
                 {unreadCount > 0 && (
@@ -124,7 +129,7 @@ export function Layout() {
         {flash && <div className="flash" role="status" aria-live="polite">{flash}</div>}
         {signOutAction.error && <div className="error" role="alert">{signOutAction.error}</div>}
       </div>
-      <main className="content main-content">
+      <main id="main-content" className="content main-content" tabIndex={-1}>
         <Outlet />
       </main>
       <footer className="footer">

@@ -21,6 +21,8 @@ const ACTION_LABELS: Record<string, string> = {
   REPORT_STATUS_CHANGED: "Status changed",
   REPORT_UPDATE_ADDED: "Official update posted",
   REPORT_STILL_HAPPENING: "Resident follow-up received",
+  REPORTER_CONFIRMATION: "Resident confirmation received",
+  REPORT_TRANSFERRED: "Report transferred",
   REPORT_MODERATED: "Moderation action",
 };
 
@@ -64,6 +66,11 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
   const [updateMessage, setUpdateMessage] = useState("");
   const [handoffTo, setHandoffTo] = useState("");
   const [handoffReason, setHandoffReason] = useState("");
+  const [transferCategoryId, setTransferCategoryId] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const transferCategories = useFetch<{ categories: Array<{ id: string; name: string; organizationId?: string | null; organizationName?: string | null }> }>(
+    accountReport?.capabilities?.canTransfer ? "/api/categories" : null,
+  );
 
   useEffect(() => {
     if (!publicTracking || !reportId || !location.hash) return;
@@ -143,6 +150,18 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
 
   const capabilities = report.capabilities ?? {};
   const guidance = reportGuidance(report.status);
+  const canFollowUp = report.status === "RESOLVED" || report.status === "CLOSED";
+  const routing = report.routing;
+  const transferableCategories = (transferCategories.data?.categories ?? []).filter(
+    (category) => category.organizationId && category.organizationId !== report.organization?.id,
+  );
+  const routingText = !routing || routing.source === "LEGACY"
+    ? "This report was created before routing provenance was recorded."
+    : routing.source === "AI"
+      ? `AI suggested the category${routing.confidence !== null && routing.confidence !== undefined ? ` (${Math.round(routing.confidence * 100)}% confidence)` : ""}. A resident reviewed it before submission.`
+      : routing.source === "AI_FALLBACK"
+        ? "AI could not confidently classify the issue, so the resident chose the category manually."
+        : "The resident chose the category manually.";
 
   return (
     <section className="detail">
@@ -219,10 +238,9 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
             <dd>{formatDateTime(report.submittedAt)}</dd>
           </div>
           <div>
-            <dt>Municipal Representative</dt>
+            <dt>Assigned staff</dt>
             <dd>
-              {report.assignedTo?.displayName ?? report.nearestRepresentative?.displayName ?? "Municipal Staff"}
-              {report.nearestRepresentative?.municipalityName ? ` (${report.nearestRepresentative.municipalityName})` : ""}
+              {report.assignedTo?.displayName ?? "Not yet claimed by the responsible organization"}
             </dd>
           </div>
           <div>
@@ -230,6 +248,8 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
             <dd>{formatDateTime(report.updatedAt)}</dd>
           </div>
         </dl>
+
+        <p className="routing-disclosure"><strong>How this was routed:</strong> {routingText}{routing?.reviewRequired ? " Staff should review the category." : ""}</p>
 
         <h2>What was reported</h2>
         <p className="description">{report.description || "No additional details were provided."}</p>
@@ -246,57 +266,54 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
         )}
 
         {(publicTracking || report.reporter?.id === user?.id) && (
-          <div className="resident-follow-up">
-            <h2>Current status confirmation</h2>
-            <p className="muted">Your confirmation is recorded for staff to review. It does not reveal your location to other residents.</p>
-            {report.reporterConfirmation ? (
-              <div className="confirmation-display">
-                <p><strong>You reported:</strong> {report.reporterConfirmation === "STILL_HAPPENING" ? "Still happening" : report.reporterConfirmation === "FIXED" ? "Fixed" : "Don't know"}</p>
-                {report.reporterConfirmedAt && <p className="muted">Confirmed on {formatDateTime(report.reporterConfirmedAt)}</p>}
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() => {
-                    const action = publicTracking && guestToken
-                      ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
-                      : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
-                    void run(action, "Your follow-up was recorded for the responsible organization.");
-                  }}
-                >Update confirmation</button>
-              </div>
+          <div className={`resident-follow-up${report.followUpNeeded ? " needs-attention" : ""}`}>
+            <h2>Resident follow-up</h2>
+            {canFollowUp ? (
+              <>
+                <p className="muted">Your feedback is recorded for staff to review. It is separate from the official status shown above and does not reveal your location to other residents.</p>
+                {report.followUpNeeded && (
+                  <p className="follow-up-alert" role="status">
+                    You reported that this is {report.reporterConfirmation === "STILL_HAPPENING" ? "still happening" : "still uncertain"}. The official status remains {reportStatusLabel(report.status)}; the responsible organization has been notified. Staff decide whether to reopen work.
+                  </p>
+                )}
+                {report.reporterConfirmation && (
+                  <p><strong>Your latest feedback:</strong> {report.reporterConfirmation === "STILL_HAPPENING" ? "Still happening" : report.reporterConfirmation === "FIXED" ? "Fixed" : "Don't know"}{report.reporterConfirmedAt ? ` · ${formatDateTime(report.reporterConfirmedAt)}` : ""}</p>
+                )}
+                <div className="confirmation-buttons">
+                  <button
+                    className="button"
+                    disabled={busy}
+                    onClick={() => {
+                      const action = publicTracking && guestToken
+                        ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
+                        : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
+                      void run(action, "Your follow-up was recorded. The official status was not changed.");
+                    }}
+                  >Still happening</button>
+                  <button
+                    className="button"
+                    disabled={busy}
+                    onClick={() => {
+                      const action = publicTracking && guestToken
+                        ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-fixed`, guestToken)
+                        : () => api.post<Report>(`/api/reports/${report.id}/confirm-fixed`);
+                      void run(action, "Your confirmation was recorded for the responsible organization.");
+                    }}
+                  >Confirm fixed</button>
+                  <button
+                    className="button"
+                    disabled={busy}
+                    onClick={() => {
+                      const action = publicTracking && guestToken
+                        ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-unknown`, guestToken)
+                        : () => api.post<Report>(`/api/reports/${report.id}/confirm-unknown`);
+                      void run(action, "Your confirmation was recorded for the responsible organization.");
+                    }}
+                  >Not sure</button>
+                </div>
+              </>
             ) : (
-              <div className="confirmation-buttons">
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() => {
-                    const action = publicTracking && guestToken
-                      ? () => api.postWithGuestAccess<Report>(`/api/reports/${report.id}/guest/still-happening`, guestToken)
-                      : () => api.post<Report>(`/api/reports/${report.id}/still-happening`);
-                    void run(action, "Your confirmation was recorded for the responsible organization.");
-                  }}
-                >Still happening</button>
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() => {
-                    const action = publicTracking && guestToken
-                      ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-fixed`, guestToken)
-                      : () => api.post<Report>(`/api/reports/${report.id}/confirm-fixed`);
-                    void run(action, "Your confirmation was recorded for the responsible organization.");
-                  }}
-                >Fixed</button>
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() => {
-                    const action = publicTracking && guestToken
-                      ? () => api.postGuestConfirm<Report>(`/api/reports/${report.id}/guest/confirm-unknown`, guestToken)
-                      : () => api.post<Report>(`/api/reports/${report.id}/confirm-unknown`);
-                    void run(action, "Your confirmation was recorded for the responsible organization.");
-                  }}
-                >Don't know</button>
-              </div>
+              <p className="muted">Follow-up becomes available after the organization marks this report resolved or closed. Until then, any official updates appear below.</p>
             )}
           </div>
         )}
@@ -313,6 +330,8 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
       {actionError && <p className="error">{actionError}</p>}
 
       {(capabilities.canClaim ||
+        capabilities.canHandoff ||
+        capabilities.canTransfer ||
         capabilities.canUpdateStatus ||
         capabilities.canAddUpdate ||
         capabilities.canModerate) && (
@@ -369,6 +388,72 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
                   )}
                   <button className="button" type="submit" disabled={busy || !handoffTo || !handoffReason.trim() || !(handoffOptions.data?.staff ?? []).some((member) => member.id !== user?.id)}>
                     Transfer ownership
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {capabilities.canTransfer && (
+              <div className="action">
+                <h3>Transfer to another department</h3>
+                <p className="muted">
+                  Send this report to a different configured organization when another service is responsible.
+                  The report returns to the submitted stage, and the resident sees why it moved. Use this only after
+                  confirming the other department owns the issue.
+                </p>
+                {transferCategories.error && <p className="error" role="alert">{transferCategories.error}</p>}
+                <form
+                  className="stack"
+                  onSubmit={(event: FormEvent) => {
+                    event.preventDefault();
+                    void run(
+                      () => api.post<Report>(`/api/reports/${report.id}/transfer`, {
+                        categoryId: transferCategoryId,
+                        reason: transferReason,
+                      }),
+                      "The report was transferred to the receiving department.",
+                    );
+                  }}
+                >
+                  <Field label="Receiving category" error={actionFieldErrors.categoryId}>
+                    <select
+                      className="select"
+                      value={transferCategoryId}
+                      onChange={(event) => setTransferCategoryId(event.target.value)}
+                      required
+                      disabled={transferCategories.loading}
+                    >
+                      <option value="">
+                        {transferCategories.loading ? "Loading departments…" : "Choose a category and department…"}
+                      </option>
+                      {transferableCategories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name} — {category.organizationName ?? "Configured department"}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Reason (shown in report history)" error={actionFieldErrors.reason}>
+                    <textarea
+                      className="textarea"
+                      rows={2}
+                      maxLength={500}
+                      value={transferReason}
+                      onChange={(event) => setTransferReason(event.target.value)}
+                      required
+                    />
+                  </Field>
+                  {!transferCategories.loading && transferableCategories.length === 0 && (
+                    <p className="warning" role="status">
+                      No other active category with a staffed organization is configured. An administrator must add one before a transfer is possible.
+                    </p>
+                  )}
+                  <button
+                    className="button"
+                    type="submit"
+                    disabled={busy || !transferCategoryId || transferReason.trim().length < 5 || transferableCategories.length === 0}
+                  >
+                    Transfer report
                   </button>
                 </form>
               </div>

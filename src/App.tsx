@@ -94,7 +94,7 @@ function HomeRoute() {
   const { user, loading, setupRequired } = useAuth();
   if (loading) return <p className="centered" role="status">Loading CivicSignal…</p>;
   if (!user) return <LandingPage setupRequired={setupRequired} />;
-  return <Protected><HomePage /></Protected>;
+  return <Protected><Navigate to="/map" replace /></Protected>;
 }
 
 export default function App() {
@@ -110,6 +110,10 @@ export default function App() {
         <Route
           path="/"
           element={<HomeRoute />}
+        />
+        <Route
+          path="/reports"
+          element={<Protected><HomePage /></Protected>}
         />
         <Route
           path="/reports/new"

@@ -95,6 +95,9 @@ const POSTGRES_SCHEMA = `
       image_embedding BYTEA,
       similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
       similarity_score DOUBLE PRECISION,
+      routing_source TEXT NOT NULL DEFAULT 'LEGACY',
+      routing_confidence DOUBLE PRECISION,
+      routing_review_required INTEGER NOT NULL DEFAULT 0,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     );
@@ -277,6 +280,9 @@ export async function createPostgresDatabase(connectionString: string): Promise<
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS image_embedding BYTEA");
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL");
     await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS similarity_score DOUBLE PRECISION");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS routing_source TEXT NOT NULL DEFAULT 'LEGACY'");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS routing_confidence DOUBLE PRECISION");
+    await initializationClient.query("ALTER TABLE reports ADD COLUMN IF NOT EXISTS routing_review_required INTEGER NOT NULL DEFAULT 0");
     await initializationClient.query("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS municipality_id TEXT REFERENCES municipalities(id) ON DELETE SET NULL");
     await initializationClient.query("ALTER TABLE reports ALTER COLUMN reporter_user_id DROP NOT NULL");
     await initializationClient.query(DATA_API_PROTECTION);

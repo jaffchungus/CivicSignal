@@ -95,6 +95,9 @@ const SQLITE_SCHEMA = `
       image_embedding BLOB,
       similar_report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
       similarity_score REAL,
+      routing_source TEXT NOT NULL DEFAULT 'LEGACY',
+      routing_confidence REAL,
+      routing_review_required INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -256,6 +259,15 @@ export async function createSqliteDatabase(filename: string): Promise<CivicDatab
     }
     if (!reportTableColumns.some((column) => column.name === "similarity_score")) {
       database.exec("ALTER TABLE reports ADD COLUMN similarity_score REAL");
+    }
+    if (!reportTableColumns.some((column) => column.name === "routing_source")) {
+      database.exec("ALTER TABLE reports ADD COLUMN routing_source TEXT NOT NULL DEFAULT 'LEGACY'");
+    }
+    if (!reportTableColumns.some((column) => column.name === "routing_confidence")) {
+      database.exec("ALTER TABLE reports ADD COLUMN routing_confidence REAL");
+    }
+    if (!reportTableColumns.some((column) => column.name === "routing_review_required")) {
+      database.exec("ALTER TABLE reports ADD COLUMN routing_review_required INTEGER NOT NULL DEFAULT 0");
     }
 
     // Add municipalities table if it doesn't exist

@@ -77,6 +77,12 @@ function UsersPanel() {
           className="card stack"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
+            if (
+              verifyForm.role === "ADMIN" &&
+              !window.confirm(`Grant full administrator access to ${verifying.displayName}? Administrators can verify officials, configure routing, and moderate reports.`)
+            ) {
+              return;
+            }
             void perform(
               () =>
                 api.post(`/api/admin/users/${verifying.id}/verify`, {
@@ -195,6 +201,12 @@ function UsersPanel() {
                     className="button"
                     disabled={busy}
                     onClick={() => {
+                      if (
+                        user.status !== "SUSPENDED" &&
+                        !window.confirm(`Suspend ${user.displayName}? Their active sessions will be revoked.`)
+                      ) {
+                        return;
+                      }
                       void perform(
                         () =>
                           api.post(`/api/admin/users/${user.id}/status`, {

@@ -440,22 +440,45 @@ describe("report filtering", () => {
   });
 });
 
-describe("photo required, AI problem detection, and deterministic municipal rep resolution", () => {
-  it("requires a photo upload to create a report and returns 422 if omitted", async () => {
+describe("optional photos, AI problem detection, and configured category routing", () => {
+  it("accepts a text-only report and routes it only to the selected category's organization", async () => {
+    const { residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+
+    const created = await residentAgent
+      .post("/api/reports")
+      .field("categoryId", roads.id)
+      .field("title", "Report without a photo")
+      .field("description", "The road surface is broken and needs an inspection.")
+      .field("location", "Main St and 1st Ave")
+      .expect(201);
+
+    expect(created.body).toMatchObject({
+      status: "SUBMITTED",
+      organization: { name: "Public Works" },
+      assignedTo: null,
+      attachments: [],
+      routing: { source: "RESIDENT", reviewRequired: false },
+    });
+    expect(created.body.nearestRepresentative).toBeUndefined();
+  });
+
+  it("protects required title and description fields", async () => {
     const { residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
 
     const response = await residentAgent
       .post("/api/reports")
       .field("categoryId", roads.id)
-      .field("title", "Report without a photo")
-      .field("description", "Testing photo required validation.")
+      .field("title", "")
+      .field("description", "short")
       .field("location", "Main St and 1st Ave")
       .expect(422);
 
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
-    expect(response.body.error.message).toContain("photo of the issue is required");
-    expect(response.body.error.fieldErrors.photo).toContain("A photo of the issue is required.");
+    expect(Object.keys(response.body.error.fieldErrors)).toEqual(
+      expect.arrayContaining(["title", "description"]),
+    );
   });
 
   it("detects the problem in an uploaded photo using AI logic via /api/reports/analyze-photo", async () => {
@@ -538,10 +561,9 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
     }));
   });
 
-  it("resolves the municipal representative using deterministic code (no AI)", async () => {
+  it("persists explicit AI routing provenance without inventing a representative", async () => {
     const { residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
-    const png = Buffer.from(PNG_BASE64, "base64");
 
     const created = await residentAgent
       .post("/api/reports")
@@ -549,22 +571,23 @@ describe("photo required, AI problem detection, and deterministic municipal rep 
       .field("title", "Broken asphalt near intersection")
       .field("description", "Deep cracking on asphalt road.")
       .field("location", "Main Street and First Avenue")
-      .attach("photo", png, { filename: "road.png", contentType: "image/png" })
+      .field("routingSource", "AI")
+      .field("routingConfidence", "0.4")
       .expect(201);
 
-    expect(created.body.nearestRepresentative).toBeDefined();
-    expect(created.body.nearestRepresentative.displayName).toBe("Olive Official");
-    expect(created.body.nearestRepresentative.organizationName).toBe("Public Works");
-    expect(created.body.nearestRepresentative.municipalityName).toBe("Springfield");
+    expect(created.body.organization).toMatchObject({ name: "Public Works" });
+    expect(created.body.assignedTo).toBeNull();
+    expect(created.body.routing).toEqual({
+      source: "AI",
+      confidence: 0.4,
+      reviewRequired: true,
+    });
+    expect(created.body.nearestRepresentative).toBeUndefined();
 
     const detail = await residentAgent
       .get(`/api/reports/${created.body.id}`)
       .expect(200);
-
-    expect(detail.body.nearestRepresentative).toMatchObject({
-      displayName: "Olive Official",
-      organizationName: "Public Works",
-      municipalityName: "Springfield",
-    });
+    expect(detail.body.nearestRepresentative).toBeUndefined();
+    expect(detail.body.routing).toEqual(created.body.routing);
   });
 });

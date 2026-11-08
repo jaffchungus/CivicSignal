@@ -31,13 +31,13 @@ export function reportGuidance(status: ReportStatus): ReportGuidance {
       return {
         heading: "The organization marked it resolved",
         explanation: "This is the status recorded by the organization in CivicSignal; it is not an independent inspection.",
-        residentAction: "A resident can mark this as still happening to return it for staff review.",
+        residentAction: "Mark this as still happening or not sure so staff can review whether to reopen it. Your feedback does not change the official status by itself.",
       };
     case "CLOSED":
       return {
         heading: "This report is closed",
         explanation: "No further workflow step is currently open for this report. Its recorded updates and history remain on this page.",
-        residentAction: "A resident can mark this as still happening to return it for staff review.",
+        residentAction: "Mark this as still happening or not sure so staff can review whether to reopen it. Your feedback does not change the official status by itself.",
       };
   }
 }

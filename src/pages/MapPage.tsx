@@ -23,7 +23,6 @@ export function MapPage() {
     timeRange: 30 as number, // days
   });
 
-  const [selectedReport, setSelectedReport] = useState<any>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [refreshInterval, setRefreshInterval] = useState(60); // seconds
@@ -284,7 +283,6 @@ export function MapPage() {
               <ReportMap
                 reports={reportsWithCoords}
                 filters={filters}
-                onReportClick={setSelectedReport}
               />
             </>
           )}
@@ -333,11 +331,11 @@ export function MapPage() {
         }
 
         .sidebar-section {
-          background: white;
+          background: #fff;
           padding: 20px;
           border-radius: 8px;
-          border: 1px solid #e1e4e8;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+          border: 1px solid #d8d7ce;
+          box-shadow: 0 1px 3px rgba(35,38,31,0.04);
         }
 
         .sidebar-header {
@@ -373,20 +371,20 @@ export function MapPage() {
           padding: 8px 4px;
           cursor: pointer;
           font-size: 14px;
-          color: #24292f;
+          color: #292d28;
           transition: background-color 0.15s ease;
           border-radius: 4px;
         }
 
         .filter-checkbox:hover {
-          background-color: #f6f8fa;
+          background-color: #f6f4ed;
         }
 
         .filter-checkbox input[type="checkbox"] {
           cursor: pointer;
-          width: 16px;
-          height: 16px;
-          accent-color: #0969da;
+          width: 18px;
+          height: 18px;
+          accent-color: #416b58;
         }
 
         .filter-checkbox .status-dot {
@@ -397,28 +395,28 @@ export function MapPage() {
         }
 
         .filter-checkbox .status-dot[data-status="SUBMITTED"] {
-          background: #ff6b6b;
+          background: #385575;
         }
 
         .filter-checkbox .status-dot[data-status="UNDER_REVIEW"] {
-          background: #ffd93d;
+          background: #79520f;
         }
 
         .filter-checkbox .status-dot[data-status="IN_PROGRESS"] {
-          background: #6bcf7f;
+          background: #285e7e;
         }
 
         .filter-checkbox .status-dot[data-status="RESOLVED"] {
-          background: #4d96ff;
+          background: #246147;
         }
 
         .filter-checkbox .status-dot[data-status="CLOSED"] {
-          background: #8b8b8b;
+          background: #526057;
         }
 
         .filter-checkbox .count {
           margin-left: auto;
-          color: #888;
+          color: #676d63;
           font-size: 12px;
         }
 
@@ -431,23 +429,23 @@ export function MapPage() {
         .stat-item {
           text-align: center;
           padding: 16px 12px;
-          background: #f6f8fa;
+          background: #f6f4ed;
           border-radius: 6px;
-          border: 1px solid #e1e4e8;
+          border: 1px solid #d8d7ce;
         }
 
         .stat-value {
           display: block;
           font-size: 28px;
           font-weight: 600;
-          color: #0969da;
+          color: #416b58;
           line-height: 1.2;
         }
 
         .stat-label {
           display: block;
           font-size: 12px;
-          color: #57606a;
+          color: #676d63;
           margin-top: 4px;
           font-weight: 500;
           text-transform: uppercase;
@@ -471,7 +469,7 @@ export function MapPage() {
         .map-area .card.empty h2 {
           margin: 0 0 12px 0;
           font-size: 20px;
-          color: #333;
+          color: #292d28;
         }
 
         .map-area .card.empty p {
@@ -481,7 +479,7 @@ export function MapPage() {
         }
 
         .filter-summary {
-          background: #e3f2fd;
+          background: #eaf3ee;
           padding: 8px 12px;
           border-radius: 6px;
           margin-bottom: 12px;
@@ -499,6 +497,24 @@ export function MapPage() {
 
           .map-area {
             order: 1;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .map-page .page-header {
+            flex-direction: column;
+          }
+
+          .map-page .header-actions {
+            flex-wrap: wrap;
+          }
+
+          .map-page .header-actions .button {
+            flex: 1 1 145px;
+          }
+
+          .stats-grid {
+            grid-template-columns: 1fr;
           }
         }
       `}</style>

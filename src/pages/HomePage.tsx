@@ -15,6 +15,7 @@ import type {
 function ResidentHome() {
   const list = useFetch<ReportListResponse>("/api/reports?scope=mine");
   const reports = list.data?.reports ?? [];
+  const needsFollowUp = reports.filter((report) => report.followUpNeeded);
   const { loading, error } = list;
 
   return (
@@ -30,6 +31,21 @@ function ResidentHome() {
           Report an issue
         </Link>
       </div>
+
+      {needsFollowUp.length > 0 && (
+        <section className="card follow-up-panel" aria-labelledby="resident-follow-up-title">
+          <div>
+            <p className="eyebrow">Needs your attention</p>
+            <h2 id="resident-follow-up-title">Is the problem still happening?</h2>
+            <p className="muted">
+              The organization marked {needsFollowUp.length === 1 ? "a report" : `${needsFollowUp.length} reports`} resolved or closed.
+              Your follow-up is recorded separately from the official status; staff decide whether to reopen work.
+            </p>
+          </div>
+          <ReportTable reports={needsFollowUp} />
+        </section>
+      )}
+
       {error && (
         <div className="error" role="alert">
           <span>{error}</span>
@@ -37,7 +53,7 @@ function ResidentHome() {
         </div>
       )}
       {loading ? (
-        <p className="centered">Loading…</p>
+        <p className="centered" role="status">Loading…</p>
       ) : reports.length === 0 ? (
         <div className="card empty">
           <h2>No reports yet</h2>
@@ -50,7 +66,13 @@ function ResidentHome() {
           </Link>
         </div>
       ) : (
-        <ReportTable reports={reports} />
+        <>
+          <div className="section-heading">
+            <h2>All your reports</h2>
+            <span className="muted">{reports.length} total</span>
+          </div>
+          <ReportTable reports={reports} />
+        </>
       )}
     </section>
   );
@@ -61,12 +83,16 @@ function StaffHome() {
   const [categoryId, setCategoryId] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [assignment, setAssignment] = useState<"" | "mine" | "unassigned">("");
+  const [followUpOnly, setFollowUpOnly] = useState(false);
   const { user } = useAuth();
 
   const params = new URLSearchParams({ scope: "queue" });
   if (status) params.set("status", status);
   if (categoryId) params.set("categoryId", categoryId);
   if (query) params.set("q", query);
+  if (assignment) params.set("assignment", assignment);
+  if (followUpOnly) params.set("followUp", "needs");
   const list = useFetch<ReportListResponse>(`/api/reports?${params.toString()}`);
   const categoryList = useFetch<{ categories: Category[] }>("/api/categories");
   const impact = useFetch<{
@@ -85,6 +111,14 @@ function StaffHome() {
   const reports = list.data?.reports ?? [];
   const total = list.data?.total ?? reports.length;
   const { loading, error } = list;
+  const resetView = () => {
+    setStatus("");
+    setCategoryId("");
+    setSearch("");
+    setQuery("");
+    setAssignment("");
+    setFollowUpOnly(false);
+  };
 
   return (
     <section>
@@ -98,8 +132,133 @@ function StaffHome() {
         </div>
       </div>
 
-      <section className="card impact-panel" aria-labelledby="service-activity-title">
-        <h2 id="service-activity-title">Service activity</h2>
+      <div className="queue-tools">
+        <div className="queue-view-switch" role="group" aria-label="Queue view">
+          <button
+            type="button"
+            className={`filter-chip${!assignment && !followUpOnly ? " active" : ""}`}
+            aria-pressed={!assignment && !followUpOnly}
+            onClick={() => { setAssignment(""); setFollowUpOnly(false); }}
+          >
+            All work
+          </button>
+          <button
+            type="button"
+            className={`filter-chip${followUpOnly ? " active" : ""}`}
+            aria-pressed={followUpOnly}
+            onClick={() => { setFollowUpOnly(true); setAssignment(""); setStatus("RESOLVED"); }}
+          >
+            Resident follow-up
+          </button>
+          <button
+            type="button"
+            className={`filter-chip${assignment === "mine" ? " active" : ""}`}
+            aria-pressed={assignment === "mine"}
+            onClick={() => { setAssignment("mine"); setFollowUpOnly(false); }}
+          >
+            Assigned to me
+          </button>
+          <button
+            type="button"
+            className={`filter-chip${assignment === "unassigned" ? " active" : ""}`}
+            aria-pressed={assignment === "unassigned"}
+            onClick={() => { setAssignment("unassigned"); setFollowUpOnly(false); }}
+          >
+            Unassigned
+          </button>
+        </div>
+
+        <form
+          className="filters"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            setQuery(search.trim());
+          }}
+        >
+          <Field label="Status" className="filter-field">
+            <select
+              className="select"
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+            >
+              <option value="">All statuses</option>
+              <option value="SUBMITTED">Submitted</option>
+              <option value="UNDER_REVIEW">Under review</option>
+              <option value="IN_PROGRESS">In progress</option>
+              <option value="RESOLVED">Resolved</option>
+              <option value="CLOSED">Closed</option>
+            </select>
+          </Field>
+          <Field label="Category" className="filter-field">
+            <select
+              className="select"
+              value={categoryId}
+              onChange={(event) => setCategoryId(event.target.value)}
+            >
+              <option value="">All categories</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Search reports" className="filter-field search-field">
+            <input
+              className="input"
+              placeholder="Title, description, or reference"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </Field>
+          <button className="button" type="submit">
+            Search
+          </button>
+          {(status || categoryId || query || assignment || followUpOnly) && (
+            <button className="button" type="button" onClick={resetView}>
+              Clear filters
+            </button>
+          )}
+        </form>
+      </div>
+
+      {error && (
+        <div className="error" role="alert">
+          <span>{error}</span>
+          <button className="button" type="button" onClick={list.reload}>Try again</button>
+        </div>
+      )}
+      {categoryList.error && <p className="muted">Category filters could not be loaded.</p>}
+      {loading ? (
+        <p className="centered" role="status">Loading…</p>
+      ) : reports.length === 0 ? (
+        <div className="card empty">
+          <h2>No reports match this view</h2>
+          <p className="muted">
+            Try clearing the filters. New reports submitted by residents appear here automatically.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="section-heading">
+            <h2>{followUpOnly ? "Resident follow-up" : assignment === "mine" ? "Assigned to you" : assignment === "unassigned" ? "Unassigned reports" : "Work queue"}</h2>
+            <span className="muted">{total} report{total === 1 ? "" : "s"}</span>
+          </div>
+          {followUpOnly && (
+            <p className="muted queue-guidance">
+              These reports are resolved or closed, but the resident said the problem is still happening or is unsure.
+              Resident feedback does not change the official status; review the report and decide whether to reopen work.
+            </p>
+          )}
+          <ReportTable reports={reports} />
+        </>
+      )}
+
+      <details className="card impact-panel">
+        <summary>
+          <span>Service activity</span>
+          <span className="muted">Recorded report measures for the last 30 days</span>
+        </summary>
         {impact.error ? (
           <div className="error" role="alert">
             <span>{impact.error}</span>
@@ -122,81 +281,7 @@ function StaffHome() {
             <p className="impact-source">Source: {impact.data.source} “Possible repeat” means the same selected category and normalized location text; it is not a verified duplicate. Submitted reports and status measures are not independently verified damage or completed work.</p>
           </>
         )}
-      </section>
-
-      <form
-        className="filters"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          setQuery(search.trim());
-        }}
-      >
-        <Field label="Status" className="filter-field">
-          <select
-            className="select"
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-          >
-            <option value="">All statuses</option>
-            <option value="SUBMITTED">Submitted</option>
-            <option value="UNDER_REVIEW">Under review</option>
-            <option value="IN_PROGRESS">In progress</option>
-            <option value="RESOLVED">Resolved</option>
-            <option value="CLOSED">Closed</option>
-          </select>
-        </Field>
-        <Field label="Category" className="filter-field">
-          <select
-            className="select"
-            value={categoryId}
-            onChange={(event) => setCategoryId(event.target.value)}
-          >
-            <option value="">All categories</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Search reports" className="filter-field search-field">
-          <input
-            className="input"
-            placeholder="Title, description, or reference"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </Field>
-        <button className="button" type="submit">
-          Search
-        </button>
-      </form>
-
-      {error && (
-        <div className="error" role="alert">
-          <span>{error}</span>
-          <button className="button" type="button" onClick={list.reload}>Try again</button>
-        </div>
-      )}
-      {categoryList.error && <p className="muted">Category filters could not be loaded.</p>}
-      {loading ? (
-        <p className="centered">Loading…</p>
-      ) : reports.length === 0 ? (
-        <div className="card empty">
-          <h2>The queue is empty</h2>
-          <p className="muted">
-            No reports match these filters right now. New reports submitted by residents
-            appear here automatically.
-          </p>
-        </div>
-      ) : (
-        <>
-          <p className="muted">
-            {total} report{total === 1 ? "" : "s"}
-          </p>
-          <ReportTable reports={reports} />
-        </>
-      )}
+      </details>
     </section>
   );
 }
@@ -211,10 +296,15 @@ function AdminHome() {
   const overview = overviewFetch.data;
   const reports = list.data?.reports ?? [];
   const { loading } = list;
+  const setupIncomplete = overview && (
+    (overview.organizations ?? 0) === 0 ||
+    (overview.categories ?? 0) === 0 ||
+    (overview.pendingVerifications ?? 0) > 0
+  );
 
   const cards = [
-    { label: "Open reports", value: overview?.openReports },
     { label: "Pending verifications", value: overview?.pendingVerifications },
+    { label: "Open reports", value: overview?.openReports },
     { label: "Moderation queue", value: overview?.moderationQueue },
     { label: "Users", value: overview?.users },
     { label: "Organizations", value: overview?.organizations },
@@ -235,6 +325,20 @@ function AdminHome() {
           Open administration
         </Link>
       </div>
+
+      {setupIncomplete && (
+        <section className="card setup-checklist" aria-labelledby="setup-checklist-title">
+          <h2 id="setup-checklist-title">Setup and verification</h2>
+          <p className="muted">These checks come from live platform records, not sample data.</p>
+          <ul>
+            <li>{overview.organizations ? `✓ ${overview.organizations} organization${overview.organizations === 1 ? "" : "s"} configured` : "Add at least one active organization."}</li>
+            <li>{overview.categories ? `✓ ${overview.categories} categor${overview.categories === 1 ? "y" : "ies"} configured` : "Add at least one active category so residents can submit reports."}</li>
+            <li>{overview.pendingVerifications ? `${overview.pendingVerifications} account${overview.pendingVerifications === 1 ? "" : "s"} awaiting verification.` : "No accounts are awaiting verification."}</li>
+          </ul>
+          <Link className="button" to="/admin">Review setup</Link>
+        </section>
+      )}
+
       <div className="stat-grid">
         {cards.map((card) => (
           <div key={card.label} className="stat-card">
@@ -251,9 +355,12 @@ function AdminHome() {
           </button>
         </div>
       )}
-      <h2>All reports</h2>
+      <div className="section-heading">
+        <h2>Recent reports</h2>
+        <Link to="/admin">Review all</Link>
+      </div>
       {loading ? (
-        <p className="centered">Loading…</p>
+        <p className="centered" role="status">Loading…</p>
       ) : reports.length === 0 ? (
         <div className="card empty">
           <h3>No reports have been submitted</h3>

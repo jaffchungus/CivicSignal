@@ -121,6 +121,14 @@ export type Attachment = {
   contentType?: string;
 };
 
+export type ReportRoutingSource = "AI" | "RESIDENT" | "AI_FALLBACK" | "LEGACY";
+
+export type ReportRouting = {
+  source: ReportRoutingSource;
+  confidence?: number | null;
+  reviewRequired: boolean;
+};
+
 export type ReportUpdate = {
   id: string;
   message: string;
@@ -157,19 +165,15 @@ export type Report = {
   moderationStatus?: string | null;
   reporterConfirmation?: "STILL_HAPPENING" | "FIXED" | "DONT_KNOW" | null;
   reporterConfirmedAt?: string | null;
+  followUpNeeded?: boolean;
+  routing?: ReportRouting | null;
+  latestUpdate?: ReportUpdate | null;
   attachments?: Attachment[];
   updates?: ReportUpdate[];
   timeline?: ReportTimelineEntry[];
   allowedTransitions?: ReportStatus[];
   canClaim?: boolean;
   capabilities?: Record<string, boolean>;
-  nearestRepresentative?: {
-    id: string;
-    displayName: string;
-    role: UserRole;
-    organizationName?: string;
-    municipalityName?: string;
-  } | null;
   isPersistentProblem?: boolean;
   relatedReportCount?: number;
   similarReportId?: string | null;
