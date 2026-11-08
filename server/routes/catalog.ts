@@ -62,7 +62,10 @@ export function createCatalogRouter(deps: { database: CivicDatabase; photoStorag
       photoStorage: photoStorageAvailable
         ? { status: "configured" }
         : { status: "unavailable" },
-      duplicateDetection: { status: "unavailable", reason: "No location-aware duplicate matching is configured." },
+      duplicateDetection: {
+        status: "partial",
+        reason: "Staff priority groups active reports in the same category within 100 meters over 30 days; reports are not blocked or merged.",
+      },
       externalNotifications: { status: "unavailable", reason: "No verified email or text provider is configured." },
       reviewWindow: { status: "unavailable", reason: "No organization review estimate is configured." },
     });
