@@ -3,7 +3,12 @@
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cleanupApplications, setupAdministrator, testApplication } from "./helpers";
+import {
+  cleanupApplications,
+  setTestPhotoAnalysis,
+  setupAdministrator,
+  testApplication,
+} from "./helpers";
 
 afterEach(async () => {
   await cleanupApplications();
@@ -46,12 +51,16 @@ describe("verified staff report handoff", () => {
     }).expect(201);
     const { body: catalog } = await request(app).get("/api/categories").expect(200);
     const category = catalog.categories.find((item: { name: string }) => item.name === "Roads and Sidewalks");
+    setTestPhotoAnalysis({
+      categoryId: category.id,
+      title: "Road surface damage",
+      description: "The road surface is broken near the intersection.",
+    });
     const report = await resident
       .post("/api/reports")
-      .field("categoryId", category.id)
       .field("location", "Main Street")
-      .field("title", "Road surface damage")
-      .field("description", "The road surface is broken near the intersection.")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
         filename: "damage.png",
         contentType: "image/png",
@@ -126,12 +135,20 @@ describe("verified staff report handoff", () => {
     const roads = catalog.categories.find((item: { name: string }) => item.name === "Roads and Sidewalks");
     const streetlights = catalog.categories.find((item: { name: string }) => item.name === "Streetlights");
     const safety = catalog.categories.find((item: { name: string }) => item.name === "Non-Emergency Public Safety");
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Abandoned vehicle blocking the lane",
+      description: "A vehicle has been left in the travel lane for several days.",
+    });
     const report = await resident
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Abandoned vehicle blocking the lane")
-      .field("description", "A vehicle has been left in the travel lane for several days.")
       .field("location", "Main Street near the library")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
+        filename: "vehicle.png",
+        contentType: "image/png",
+      })
       .expect(201);
 
     await publicWorksOfficial.agent.post(`/api/reports/${report.body.id}/claim`).expect(200);

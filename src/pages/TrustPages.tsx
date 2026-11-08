@@ -13,9 +13,9 @@ export function PrivacyPage() {
         <li>A session cookie in your browser; the server stores a hash of the session token and an expiry time.</li>
         <li>Report issue type, summary and details, exact location, status history, official updates, and related notifications.</li>
         <li>If you opt in to system alerts, the app stores this browser or device’s push endpoint and subscription keys on your account. Turn alerts off to remove that device’s subscription.</li>
-        <li>A photo is optional. Your draft, including any selected photo, is stored in this browser for the current account or guest session until you discard it, submit the report, or change accounts. Drafts are not sent to the receiving organization until you submit.</li>
-        <li>If Gemini photo analysis is configured, a selected photo is automatically sent to Google for an optional category and description suggestion. You can edit or ignore the suggestion. The deployment operator's Google billing status controls Google's data-use terms. Do not send sensitive or confidential images; review <Link to="/terms">CivicSignal's eligibility terms</Link> and the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
-        <li>If you save a GPS pin, its exact coordinates are stored with the report and shown to the authorized organization staff who receive it. The optional address lookup also sends the coordinates to the configured lookup provider. Its suggested address is editable, and a lookup failure does not remove the saved pin.</li>
+        <li>A photo is required. Your draft photo is stored in this browser for the current account or guest session until you discard it, submit the report, or change accounts. Drafts are not sent to the receiving organization until you submit.</li>
+        <li>When you submit, the required photo is sent to Google Gemini for classification. AI writes the report title and problem description, selects an active category and organization, and identifies an available staff member for assignment. The deployment operator's Google billing status controls Google's data-use terms. Do not send sensitive or confidential images; review <Link to="/terms">CivicSignal's eligibility terms</Link> and the <a href="https://ai.google.dev/gemini-api/terms?hl=en" target="_blank" rel="noreferrer">Gemini API terms</a>.</li>
+        <li>If you save a GPS pin, its exact coordinates are stored with the report and shown to the authorized organization staff who receive it. The optional address lookup also sends the coordinates to the configured lookup provider. Its suggested address is used only as a readable label; the GPS pin remains authoritative, and a lookup failure does not remove the pin.</li>
         <li>For a report sent without an account, a random secure tracking token is issued. The server stores only its hash. The link grants access to that report for 90 days.</li>
       </ul>
 
@@ -44,13 +44,13 @@ export function TermsPage() {
       <p>CivicSignal is a civic app that helps solve community issues. It is not a government agency, 311 service, or official public record, and no government endorsement or integration is represented.</p>
 
       <h2>Eligibility</h2>
-      <p>CivicSignal is intended for adults aged 18 and older. By using this service, you confirm that you are at least 18 years old. People under 18 may not use it. Optional photo analysis uses a third-party AI service when enabled by the deployment operator. The operator is responsible for ensuring that its use of that service, including the audience and purpose, meets the provider's current terms.</p>
+      <p>CivicSignal is intended for adults aged 18 and older. By using this service, you confirm that you are at least 18 years old. People under 18 may not use it. Photo analysis uses a third-party AI service when the deployment operator enables it; report submission depends on that service. The operator is responsible for ensuring that its use of that service, including the audience and purpose, meets the provider's current terms.</p>
 
       <h2>Use it for non-emergency issues only</h2>
       <p>CivicSignal is not continuously monitored and cannot dispatch emergency help. If someone is in immediate danger, call 911. For urgent local service, use the responsible organization's established public contact channels.</p>
 
       <h2>How routing and status work</h2>
-      <p>Reports are routed only to organizations and categories configured by the operator of a particular deployment. Statuses and updates show what an authorized CivicSignal account recorded. A status such as “Resolved” is not an independent inspection or a guarantee that a government agency completed work.</p>
+      <p>AI selects an active category configured by the operator, and that category’s organization receives the report. CivicSignal then prefers a verified staff member in the estimated municipality and otherwise the closest available person in that organization. These are best-effort assignments based on administrator-configured locations, not a verified dispatch service or a guarantee of jurisdiction. Statuses and updates show what an authorized CivicSignal account recorded. A status such as “Resolved” is not an independent inspection or a guarantee that a government agency completed work.</p>
 
       <h2>Share only information needed to explain the issue</h2>
       <p>Do not submit passwords, financial or medical information, private documents, or other sensitive personal information. Avoid photos that show faces, license plates, or identifying details. Administrators may moderate reports that are inappropriate or no longer part of the workflow.</p>

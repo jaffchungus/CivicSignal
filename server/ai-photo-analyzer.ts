@@ -11,6 +11,13 @@ export interface PhotoAnalysisCategory {
   organizationName: string;
 }
 
+/** Injectable classifier boundary so tests can exercise report routing without a provider. */
+export type PhotoAnalyzer = (
+  imageBuffer: Buffer,
+  mimeType: string,
+  availableCategories?: PhotoAnalysisCategory[],
+) => Promise<PhotoAnalysisResult>;
+
 interface GeminiResponse {
   candidates?: Array<{
     content?: {

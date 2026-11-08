@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   cleanupApplications,
+  setTestPhotoAnalysis,
   setupAdministrator,
   testApplication,
   testApplicationWithUploads,
@@ -99,12 +100,12 @@ async function createReport(
   description: string,
   location: string,
 ): Promise<ReportRef> {
+  setTestPhotoAnalysis({ categoryId, title, description });
   const response = await agent
     .post("/api/reports")
-    .field("categoryId", categoryId)
-    .field("title", title)
-    .field("description", description)
     .field("location", location)
+    .field("latitude", "39.7817")
+    .field("longitude", "-89.6501")
     .attach("photo", PNG, { filename: "report.png", contentType: "image/png" })
     .expect(201);
   return reportRef(response.body);
@@ -201,12 +202,16 @@ beforeAll(async () => {
     "Oak Street 14",
   );
 
+  setTestPhotoAnalysis({
+    categoryId: scenario.roadsCategoryId,
+    title: "Blocked storm drain on Pine Street",
+    description: "A storm drain is blocked and the sidewalk floods.",
+  });
   const guest = await request(app)
     .post("/api/reports/guest")
-    .field("categoryId", scenario.roadsCategoryId)
-    .field("title", "Blocked storm drain on Pine Street")
-    .field("description", "A storm drain is blocked and the sidewalk floods.")
     .field("location", "Pine Street and 8th Avenue")
+    .field("latitude", "39.7817")
+    .field("longitude", "-89.6501")
     .attach("photo", PNG, { filename: "guest.png", contentType: "image/png" })
     .expect(201);
   scenario.guestReport = reportRef(guest.body);
@@ -306,7 +311,7 @@ describe("cross-account authorization", () => {
   });
 
   it("denies staff workflow actions on another organization's report", async () => {
-    const { residentA, admin, officialA, officialB, reportA, parksCategoryId } = scenario;
+    const { residentA, admin, officialA, officialB, reportA, roadsCategoryId, parksCategoryId } = scenario;
     const secrets = [reportA.referenceCode, reportA.title];
 
     const claim = await officialB.post(`/api/reports/${reportA.id}/claim`).expect(404);
@@ -363,14 +368,14 @@ describe("cross-account authorization", () => {
     await officialA.get(`/api/reports/${reportA.id}/handoff-options`).expect(200);
     const handoff = await officialA
       .post(`/api/reports/${reportA.id}/handoff`)
-      .send({ toUserId: "anyone", reason: "not assigned" })
-      .expect(409);
-    expect(handoff.body.error.code).toBe("NOT_REPORT_OWNER");
+      .send({ toUserId: "anyone", reason: "invalid recipient" })
+      .expect(422);
+    expect(handoff.body.error.code).toBe("INVALID_HANDOFF");
     const transfer = await officialA
       .post(`/api/reports/${reportA.id}/transfer`)
-      .send({ categoryId: parksCategoryId, reason: "not assigned" })
-      .expect(409);
-    expect(transfer.body.error.code).toBe("NOT_REPORT_OWNER");
+      .send({ categoryId: roadsCategoryId, reason: "same organization" })
+      .expect(422);
+    expect(transfer.body.error.code).toBe("INVALID_TRANSFER");
   });
 
   it("keeps authorized staff workflows scoped and resident confirmations owner-only", async () => {
@@ -619,12 +624,17 @@ describe("follow-up authorization", () => {
       "Central Avenue bus stop",
     );
 
+    setTestPhotoAnalysis({
+      categoryId: roads,
+      title: "Overflowing public bin at the plaza",
+      description: "The public bin beside the plaza entrance is overflowing.",
+    });
     const guest = await request(app)
       .post("/api/reports/guest")
-      .field("categoryId", roads)
-      .field("title", "Overflowing public bin at the plaza")
-      .field("description", "The public bin beside the plaza entrance is overflowing.")
       .field("location", "Civic Plaza entrance")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", PNG, { filename: "guest.png", contentType: "image/png" })
       .expect(201);
     guestReport = reportRef(guest.body);
     guestToken = guest.body.guestAccessToken as string;
@@ -716,6 +726,10 @@ describe("notification and account isolation", () => {
     );
 
     await official.post(`/api/reports/${report.id}/claim`).expect(200);
+    await official
+      .post(`/api/reports/${report.id}/status`)
+      .send({ status: "UNDER_REVIEW" })
+      .expect(200);
     const notifications = await residentA.get("/api/notifications").expect(200);
     notificationId = notifications.body.notifications[0].id as string;
     expect(notificationId).toBeTruthy();

@@ -16,7 +16,7 @@ import { createSqliteDatabase } from "../../server/database-sqlite";
 import { createPostgresDatabase } from "../../server/database-postgres";
 import { ApiError } from "../../server/http";
 import { DiskPhotoStore } from "../../server/photo-store";
-import { setupAdministrator } from "./helpers";
+import { setTestPhotoAnalysis, setupAdministrator, testPhotoAnalyzer } from "./helpers";
 
 const closers: Array<() => Promise<void>> = [];
 const directories: string[] = [];
@@ -93,9 +93,19 @@ async function scenario(
   });
   const uploadDirectory = path.join(directory, "uploads");
   const photos = new DiskPhotoStore(uploadDirectory);
-  const runtime = createApp({ database: wrap(database), photos, secureCookies: false });
+  const runtime = createApp({
+    database: wrap(database),
+    photos,
+    secureCookies: false,
+    reportPhotoAnalyzer: testPhotoAnalyzer,
+  });
   const secondApp = secondDatabase
-    ? createApp({ database: wrap(secondDatabase), photos, secureCookies: false }).app
+    ? createApp({
+        database: wrap(secondDatabase),
+        photos,
+        secureCookies: false,
+        reportPhotoAnalyzer: testPhotoAnalyzer,
+      }).app
     : runtime.app;
   await setupAdministrator(runtime.app);
   const owner = request.agent(runtime.app);
@@ -103,15 +113,20 @@ async function scenario(
     displayName: "Report Owner", email: "owner@example.test", password: "a resident account password",
   }).expect(201);
   const { body: { categories } } = await owner.get("/api/categories").expect(200);
-  const submit = (title: string, otherConnection = false) =>
-    (otherConnection
+  const submit = (title: string, otherConnection = false) => {
+    setTestPhotoAnalysis({
+      categoryId: categories[0].id,
+      title,
+      description: "The curb ramp has broken concrete and needs repair.",
+    });
+    return (otherConnection
       ? request(secondApp).post("/api/reports").set("Cookie", registration.headers["set-cookie"])
       : owner.post("/api/reports"))
-    .field("categoryId", categories[0].id)
-    .field("title", title)
-    .field("description", "The curb ramp has broken concrete and needs repair.")
-    .field("location", "Main Street library entrance")
-    .attach("photo", PNG, { filename: "curb.png", contentType: "image/png" });
+      .field("location", "Main Street library entrance")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", PNG, { filename: "curb.png", contentType: "image/png" });
+  };
   return { app: runtime.app, secondApp, cookie: registration.headers["set-cookie"], database, photos, uploadDirectory, owner, submit };
 }
 

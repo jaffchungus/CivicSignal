@@ -17,7 +17,7 @@ import {
   type ReportStatus,
   type UserRole,
 } from "../../shared/contracts.js";
-import { isCoordinateOnlyLocation, reportLocationLabel } from "../../shared/report-location.js";
+import { reportLocationLabel } from "../../shared/report-location.js";
 import type { CivicDatabase } from "../database.js";
 import {
   createNotification,
@@ -26,8 +26,8 @@ import {
   recordReportEvent,
 } from "../activity.js";
 import { ApiError, isoTime, pathId } from "../http.js";
-import { routeReportToOrganization } from "../jurisdiction.js";
-import { detectProblemInPhoto } from "../ai-photo-analyzer.js";
+import { assignNearestStaff, findNearestMunicipality, routeReportToOrganization } from "../jurisdiction.js";
+import { detectProblemInPhoto, type PhotoAnalyzer } from "../ai-photo-analyzer.js";
 import {
   findSimilarReports,
   generateImageEmbedding,
@@ -174,44 +174,29 @@ const coordinateSchema = z.preprocess(
   z.number().finite().optional(),
 );
 
-const routingConfidenceSchema = z.preprocess(
-  (value) => value === "" || value === null ? undefined : typeof value === "string" ? Number(value) : value,
-  z.number().min(0).max(1).optional(),
+const requiredCoordinateSchema = z.preprocess(
+  (value) => value === "" || value === null || value === undefined
+    ? undefined
+    : typeof value === "string" ? Number(value) : value,
+  z.number().finite(),
 );
 
+// Residents supply only the photo and GPS pin. The AI derives the title,
+// description, active category, and responsible organization on the server.
 const createReportSchema = z.object({
-  categoryId: z.string().trim().min(1),
-  municipalityId: z.string().trim().optional(),
-  title: z.string().trim().min(4, "Add a short title for the problem.").max(140),
-  description: z.string().trim().min(10, "Describe what is happening and where.").max(4000),
   location: z.string().trim().max(300).optional().default(""),
-  latitude: coordinateSchema,
-  longitude: coordinateSchema,
+  latitude: requiredCoordinateSchema,
+  longitude: requiredCoordinateSchema,
   accuracyMeters: coordinateSchema,
-  routingSource: z.enum(["AI", "RESIDENT", "AI_FALLBACK"]).optional().default("RESIDENT"),
-  routingConfidence: routingConfidenceSchema,
 }).superRefine((input, context) => {
-  if ((input.latitude === undefined) !== (input.longitude === undefined)) {
-    context.addIssue({ code: "custom", path: ["location"], message: "A complete GPS pin is required." });
-  }
-  const hasCoordinates = input.latitude !== undefined && input.longitude !== undefined;
   if (input.accuracyMeters !== undefined && (input.accuracyMeters < 0 || input.accuracyMeters > 100_000)) {
     context.addIssue({ code: "custom", path: ["accuracyMeters"], message: "GPS accuracy must be between 0 and 100,000 meters." });
   }
-  if (input.accuracyMeters !== undefined && !hasCoordinates) {
-    context.addIssue({ code: "custom", path: ["accuracyMeters"], message: "GPS accuracy requires a location pin." });
-  }
-  if (input.latitude !== undefined && (input.latitude < -90 || input.latitude > 90)) {
+  if (input.latitude < -90 || input.latitude > 90) {
     context.addIssue({ code: "custom", path: ["latitude"], message: "Latitude must be between -90 and 90." });
   }
-  if (input.longitude !== undefined && (input.longitude < -180 || input.longitude > 180)) {
+  if (input.longitude < -180 || input.longitude > 180) {
     context.addIssue({ code: "custom", path: ["longitude"], message: "Longitude must be between -180 and 180." });
-  }
-  if (input.location.length < 3 && !hasCoordinates) {
-    context.addIssue({ code: "custom", path: ["location"], message: "Enter a street address, intersection, landmark, or save a GPS pin." });
-  }
-  if (isCoordinateOnlyLocation(input.location) && !hasCoordinates) {
-    context.addIssue({ code: "custom", path: ["location"], message: "Enter a street address, intersection, or landmark instead of coordinates." });
   }
 });
 
@@ -266,6 +251,15 @@ function canView(
 ): boolean {
   if (user.role === "ADMIN") return true;
   if (row.reporter_user_id === user.id) return row.moderation_status !== "REMOVED";
+  // A report can be assigned across organizations when the nearest eligible
+  // person works elsewhere. That person must be able to open the report.
+  if (
+    isStaffRole(user.role) &&
+    row.assigned_user_id === user.id &&
+    row.moderation_status === "VISIBLE"
+  ) {
+    return true;
+  }
   return (
     isStaffRole(user.role) &&
     row.organization_id === user.organizationId &&
@@ -282,12 +276,19 @@ function assertCanView(
   }
 }
 
-/** Official workflow actions are limited to verified staff of the handling organization. */
+/**
+ * Official workflow actions are limited to staff of the handling organization
+ * and the person currently assigned to the report, who may work in another
+ * organization.
+ */
 function assertCanManage(
   row: ReportRow,
   user: { id: string; role: UserRole; organizationId: string | null },
 ): void {
-  if (!isStaffRole(user.role) || row.organization_id !== user.organizationId) {
+  if (
+    !isStaffRole(user.role) ||
+    (row.organization_id !== user.organizationId && row.assigned_user_id !== user.id)
+  ) {
     throw new ApiError(
       403,
       "FORBIDDEN",
@@ -431,7 +432,8 @@ async function serializeDetail(
   }>;
 
   const staffScope =
-    isStaffRole(user.role) && row.organization_id === user.organizationId;
+    isStaffRole(user.role) &&
+    (row.organization_id === user.organizationId || row.assigned_user_id === user.id);
   const canReadStaffNotes = user.role === "ADMIN" || staffScope;
   const internalAssignmentActions = new Set(["REPORT_HANDED_OFF", "REPORT_TRANSFERRED"]);
 
@@ -540,8 +542,9 @@ export function createReportsRouter(deps: {
   database: CivicDatabase;
   photos: PhotoStore;
   sessionCookie: string;
+  analyzePhoto?: PhotoAnalyzer;
 }): Router {
-  const { database, photos, sessionCookie } = deps;
+  const { database, photos, sessionCookie, analyzePhoto = detectProblemInPhoto } = deps;
   const router = Router();
   const reportCreationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
@@ -591,84 +594,97 @@ export function createReportsRouter(deps: {
     guestToken?: string,
   ): Promise<{ report: Awaited<ReturnType<typeof serializeDetail>>; guestAccessToken?: string }> {
     const input = createReportSchema.parse(request.body);
-
-    // Validate municipality if provided
-    let municipalityId = input.municipalityId ?? null;
-    if (municipalityId) {
-      const municipality = (await database
-        .prepare("SELECT id, name FROM municipalities WHERE id = ? AND active = 1")
-        .get(municipalityId)) as { id: string; name: string } | undefined;
-      if (!municipality) {
-        throw new ApiError(
-          422,
-          "VALIDATION_ERROR",
-          "The request contains invalid fields.",
-          { municipalityId: ["The selected municipality is not valid."] },
-        );
-      }
-    }
-
-    // Route only to the configured organization for the selected category.
-    const coordinates = input.latitude !== undefined && input.longitude !== undefined
-      ? { latitude: input.latitude, longitude: input.longitude }
-      : null;
-    const routing = await routeReportToOrganization(
-      database,
-      input.categoryId,
-      municipalityId,
-      coordinates,
-    );
-
-    // Get the category name for the title
-    const categoryRow = (await database
-      .prepare("SELECT name FROM categories WHERE id = ?")
-      .get(routing.categoryId)) as { name: string } | undefined;
-
-    const category = {
-      id: routing.categoryId,
-      name: categoryRow?.name || "Issue",
-      organization_id: routing.organizationId,
-    };
-
-    // Override municipalityId with the routed municipality
-    municipalityId = routing.municipalityId;
-
-    const title = input.title;
-    const description = input.description;
-    const location = input.location || "Precise GPS pin attached";
-    const latitude = input.latitude ?? null;
-    const longitude = input.longitude ?? null;
-    const accuracyMeters = input.accuracyMeters ?? null;
-    const now = Date.now();
-    const reportId = randomUUID();
     const file = request.file;
-    const fileContentType = file ? actualImageType(file.buffer) : null;
-    if (file && (!fileContentType || fileContentType !== file.mimetype.toLowerCase())) {
+    if (!file) {
+      throw new ApiError(422, "VALIDATION_ERROR", "The request contains invalid fields.", {
+        photo: ["Upload or take a photo of the issue."],
+      });
+    }
+    const fileContentType = actualImageType(file.buffer);
+    if (!fileContentType || fileContentType !== file.mimetype.toLowerCase()) {
       throw new ApiError(
         415,
         "INVALID_IMAGE_CONTENT",
         "The file contents do not match a supported image type.",
       );
     }
-    const storedPhoto = file && fileContentType
-      ? await photos.save(file.buffer, file.originalname, fileContentType)
-      : null;
 
-    // Photo comparison is optional, and only runs when a photo was supplied.
-    const imageEmbedding = file ? await generateImageEmbedding(file.buffer) : null;
-    const similarReport = imageEmbedding
-      ? await findSimilarReports(
-          database,
-          reportId,
-          latitude,
-          longitude,
-          category.id,
-          imageEmbedding,
-        )
-      : null;
-    const routingReviewRequired =
-      input.routingSource === "AI_FALLBACK" ||
-      (input.routingSource === "AI" && (input.routingConfidence ?? 0) < 0.6);
+    const categories = (await database
+      .prepare(
+        `SELECT categories.id, categories.name, categories.description,
+                organizations.name AS "organizationName"
+         FROM categories
+         JOIN organizations ON organizations.id = categories.organization_id
+         WHERE categories.active = 1 AND organizations.active = 1
+         ORDER BY categories.name`,
+      )
+      .all()) as Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      organizationName: string;
+    }>;
+    const analysis = await analyzePhoto(file.buffer, fileContentType, categories);
+    if (analysis.isSpam) {
+      throw new ApiError(
+        422,
+        "IMAGE_NOT_ACCEPTED",
+        "This photo does not appear to show a civic issue. Choose a clear photo of the problem.",
+        { photo: ["Choose a clear photo of the civic issue."] },
+      );
+    }
+    if (
+      !analysis.suggestedCategoryId ||
+      !categories.some((category) => category.id === analysis.suggestedCategoryId)
+    ) {
+      throw new ApiError(
+        422,
+        "CATEGORY_UNRESOLVED",
+        "AI could not match this photo to an active issue category. Try another photo or ask an administrator to configure categories.",
+        { photo: ["AI could not classify this photo. Try another photo."] },
+      );
+    }
+
+    const coordinates = { latitude: input.latitude, longitude: input.longitude };
+    const routing = await routeReportToOrganization(
+      database,
+      analysis.suggestedCategoryId,
+      null,
+      coordinates,
+    );
+    const municipality = await findNearestMunicipality(database, coordinates);
+    const municipalityId = municipality?.id ?? routing.municipalityId;
+    const assignee = await assignNearestStaff(database, {
+      coordinates,
+      reportMunicipalityId: municipalityId,
+      fallbackOrganizationId: routing.organizationId,
+    });
+
+    const category = {
+      id: routing.categoryId,
+      name: categories.find((entry) => entry.id === routing.categoryId)?.name ?? "Issue",
+      organization_id: routing.organizationId,
+    };
+    const title = analysis.suggestedTitle;
+    const description = analysis.suggestedDescription;
+    const location = input.location || "Precise GPS pin attached";
+    const latitude = coordinates.latitude;
+    const longitude = coordinates.longitude;
+    const accuracyMeters = input.accuracyMeters ?? null;
+    const now = Date.now();
+    const reportId = randomUUID();
+    const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
+
+    const imageEmbedding = await generateImageEmbedding(file.buffer);
+    const similarReport = await findSimilarReports(
+      database,
+      reportId,
+      latitude,
+      longitude,
+      category.id,
+      imageEmbedding,
+    );
+    const routingReviewRequired = analysis.confidence < 0.6;
 
     let referenceCode = "";
     let pushRecipients: string[] = [];
@@ -681,7 +697,7 @@ export function createReportsRouter(deps: {
              organization_id, municipality_id, reporter_user_id, assigned_user_id, status,
              moderation_status, image_embedding, similar_report_id, similarity_score,
              routing_source, routing_confidence, routing_review_required, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           reportId,
@@ -696,11 +712,12 @@ export function createReportsRouter(deps: {
           category.organization_id,
           municipalityId,
           reporterUserId,
-          imageEmbedding ? serializeEmbedding(imageEmbedding) : null,
+          assignee?.id ?? null,
+          serializeEmbedding(imageEmbedding),
           similarReport?.similarReportId ?? null,
           similarReport?.similarityScore ?? null,
-          input.routingSource,
-          input.routingConfidence ?? null,
+          "AI",
+          analysis.confidence,
           routingReviewRequired ? 1 : 0,
           now,
           now,
@@ -723,7 +740,7 @@ export function createReportsRouter(deps: {
         message: title,
       });
 
-      if (file && storedPhoto && fileContentType) {
+      if (storedPhoto && fileContentType) {
         await database
           .prepare(
             `INSERT INTO attachments
@@ -745,8 +762,20 @@ export function createReportsRouter(deps: {
         reportId,
         type: "REPORT_SUBMITTED",
         title: `New report: ${title}`,
-        message: `${referenceCode} was submitted to ${category.name} and needs review.`,
+        message: `${referenceCode} was submitted to ${category.name} and needs review.${assignee ? ` Assigned to ${assignee.displayName} (${assignee.organizationName}).` : ""}`,
       }, true);
+
+      if (assignee && assignee.organizationId !== routing.organizationId) {
+        await createNotification(database, {
+          userId: assignee.id,
+          reportId,
+          type: "REPORT_ASSIGNED",
+          title: `Assigned to you: ${referenceCode}`,
+          message: `${referenceCode} was routed to ${routing.organizationName} and assigned to you as the nearest eligible staff member.`,
+          deferPush: true,
+        });
+        pushRecipients.push(assignee.id);
+      }
 
       // Check if this is a persistent problem and notify appropriate staff
       if (similarReport) {
@@ -981,8 +1010,10 @@ export function createReportsRouter(deps: {
       parameters.push(user.id);
       filters.push("reports.moderation_status != 'REMOVED'");
     } else if (scope === "queue") {
-      filters.push("reports.organization_id = ?");
-      parameters.push(user.organizationId);
+      // Assigned cross-organization reports belong in the assignee's queue even
+      // though the report remains owned by the AI-routed organization.
+      filters.push("(reports.organization_id = ? OR reports.assigned_user_id = ?)");
+      parameters.push(user.organizationId, user.id);
       filters.push("reports.moderation_status = 'VISIBLE'");
     }
     if (query.status) {

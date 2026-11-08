@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanupApplications,
   setupAdministrator,
+  setTestPhotoAnalysis,
   testApplicationWithUploads,
 } from "./helpers";
 
@@ -29,13 +30,17 @@ describe("guest reporting and secure follow-up", () => {
         expect(body.externalNotifications.status).toBe("unavailable");
       });
     const category = catalog.categories.find((entry: { name: string }) => entry.name === "Roads and Sidewalks");
+    setTestPhotoAnalysis({
+      categoryId: category.id,
+      title: "Pothole at Main Street crossing",
+      description: "A deep pothole is filling with water beside the crosswalk.",
+    });
 
     const created = await request(app)
       .post("/api/reports/guest")
-      .field("categoryId", category.id)
-      .field("title", "Pothole at Main Street crossing")
-      .field("description", "A deep pothole is filling with water beside the crosswalk.")
       .field("location", "Main Street and 4th Avenue")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "pothole.png", contentType: "image/png" })
       .expect(201);
 
@@ -64,12 +69,16 @@ describe("guest reporting and secure follow-up", () => {
         expect(body.error.code).toBe("FOLLOW_UP_NOT_AVAILABLE");
       });
 
+    setTestPhotoAnalysis({
+      categoryId: category.id,
+      title: "Broken pavement on Oak Street",
+      description: "Loose pavement is a trip hazard near the curb.",
+    });
     const other = await request(app)
       .post("/api/reports/guest")
-      .field("categoryId", category.id)
-      .field("title", "Broken pavement on Oak Street")
-      .field("description", "Loose pavement is a trip hazard near the curb.")
       .field("location", "Oak Street")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "road.png", contentType: "image/png" })
       .expect(201);
     await request(app)
@@ -107,12 +116,16 @@ describe("guest reporting and secure follow-up", () => {
       (item: { name: string }) => item.name === "Roads and Sidewalks",
     );
     const png = Buffer.from(PNG_BASE64, "base64");
+    setTestPhotoAnalysis({
+      categoryId: category.id,
+      title: "Broken fixture at the library entrance",
+      description: "The entrance fixture is loose and could fall.",
+    });
     const created = await request(app)
       .post("/api/reports/guest")
-      .field("categoryId", category.id)
-      .field("title", "Broken fixture at the library entrance")
-      .field("description", "The entrance fixture is loose and could fall.")
       .field("location", "Library entrance")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", png, { filename: "issue.png", contentType: "image/png" })
       .expect(201);
     const attachment = created.body.attachments[0];

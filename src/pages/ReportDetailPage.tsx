@@ -158,7 +158,7 @@ export function ReportDetailPage({ publicTracking = false }: { publicTracking?: 
   const routingText = !routing || routing.source === "LEGACY"
     ? "This report was created before routing provenance was recorded."
     : routing.source === "AI"
-      ? `AI suggested the category${routing.confidence !== null && routing.confidence !== undefined ? ` (${Math.round(routing.confidence * 100)}% confidence)` : ""}. A resident reviewed it before submission.`
+      ? `AI selected the category${routing.confidence !== null && routing.confidence !== undefined ? ` (${Math.round(routing.confidence * 100)}% confidence)` : ""} from the photo. The server routed the report to the responsible organization and assigned the nearest eligible staff member.`
       : routing.source === "AI_FALLBACK"
         ? "AI could not confidently classify the issue, so the resident chose the category manually."
         : "The resident chose the category manually.";

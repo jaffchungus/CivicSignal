@@ -7,8 +7,10 @@ import request from "supertest";
 import { expect } from "vitest";
 
 import { createApp } from "../../server/app";
+import type { PhotoAnalysisCategory, PhotoAnalyzer } from "../../server/ai-photo-analyzer";
 import { createSqliteDatabase } from "../../server/database-sqlite";
 import { DiskPhotoStore } from "../../server/photo-store";
+import type { PhotoAnalysisResult } from "../../shared/contracts";
 
 const closers: Array<() => Promise<void>> = [];
 const temporaryDirectories: string[] = [];
@@ -16,7 +18,50 @@ const temporaryDirectories: string[] = [];
 type TestApplicationOptions = {
   secureCookies?: boolean;
   sessionTtlMs?: number;
+  reportPhotoAnalyzer?: PhotoAnalyzer;
 };
+
+export type TestPhotoAnalysis = {
+  categoryId?: string;
+  categoryName?: string;
+  title?: string;
+  description?: string;
+  problem?: string;
+  confidence?: number;
+  isSpam?: boolean;
+};
+
+let nextPhotoAnalysis: TestPhotoAnalysis = {};
+
+/** Selects the deterministic classification the injected test classifier returns next. */
+export function setTestPhotoAnalysis(input: TestPhotoAnalysis): void {
+  nextPhotoAnalysis = { ...input };
+}
+
+/**
+ * Test-only classifier. It exercises the real submission, routing, and
+ * assignment code without making a provider request or requiring a key.
+ */
+export async function testPhotoAnalyzer(
+  _imageBuffer: Buffer,
+  _mimeType: string,
+  categories: PhotoAnalysisCategory[] = [],
+): Promise<PhotoAnalysisResult> {
+  const selection = nextPhotoAnalysis;
+  nextPhotoAnalysis = {};
+  const category = categories.find((entry) => entry.id === selection.categoryId)
+    ?? categories.find((entry) => entry.name === selection.categoryName)
+    ?? categories[0];
+  return {
+    problem: selection.problem ?? selection.title ?? "A civic issue is visible in the photo.",
+    suggestedCategoryId: selection.categoryId ?? category?.id ?? "",
+    suggestedTitle: selection.title ?? "AI-identified civic issue",
+    suggestedDescription: selection.description ?? "A civic issue was identified from the submitted photo.",
+    confidence: selection.confidence ?? 0.92,
+    detectedCues: ["test fixture"],
+    isSpam: selection.isSpam ?? false,
+  };
+}
 
 /** Creates a fresh CivicSignal app on a throwaway database and exposes its upload directory. */
 export async function testApplicationWithUploads(
@@ -24,6 +69,7 @@ export async function testApplicationWithUploads(
 ): Promise<{
   app: Express;
   uploadDirectory: string;
+  database: Awaited<ReturnType<typeof createSqliteDatabase>>;
 }> {
   const directory = await mkdtemp(path.join(tmpdir(), "civicsignal-api-"));
   temporaryDirectories.push(directory);
@@ -34,10 +80,11 @@ export async function testApplicationWithUploads(
     database,
     photos,
     secureCookies: options.secureCookies ?? false,
+    reportPhotoAnalyzer: options.reportPhotoAnalyzer ?? testPhotoAnalyzer,
     ...(options.sessionTtlMs === undefined ? {} : { sessionTtlMs: options.sessionTtlMs }),
   });
   closers.push(close);
-  return { app, uploadDirectory };
+  return { app, uploadDirectory, database };
 }
 
 /** Creates a fresh CivicSignal app on a throwaway database. */

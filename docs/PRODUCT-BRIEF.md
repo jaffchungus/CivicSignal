@@ -23,7 +23,7 @@ They should be able to:
 * Create an account
 * Sign in and manage their profile
 * Submit a civic issue/report
-* Provide the issue category, description, location, and optional photos or other supporting information
+* Submit a photo and location; AI determines the issue category, title, and description
 * View their submitted reports
 * See the current status of each report
 * View updates/responses associated with their reports
@@ -88,14 +88,11 @@ The central CivicSignal workflow is:
 
 A resident creates a report with:
 
-* Category
-* Title/short summary
-* Detailed description
-* Location
-* Optional photo/evidence
+* Required photo/evidence
+* Device location (latitude/longitude, optional accuracy and address label)
 * Submission timestamp
 
-The system creates a unique report ID and records the submitting user.
+The server uses AI to determine the category, title, and description, routes the report to the configured organization, and assigns the nearest eligible verified staff member. The system creates a unique report ID and records the submitting user.
 
 ### Step 2 — Report enters the civic workflow
 

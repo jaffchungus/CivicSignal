@@ -9,7 +9,7 @@ import { createSqliteDatabase } from "../../server/database-sqlite";
 import { ApiError } from "../../server/http";
 import { SupabasePhotoStore } from "../../server/photo-supabase";
 import { createSupabaseServerClient } from "../../server/supabase";
-import { setupAdministrator } from "./helpers";
+import { setTestPhotoAnalysis, setupAdministrator, testPhotoAnalyzer } from "./helpers";
 
 const SUPABASE_URL = "https://storage.example.supabase.co";
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -65,18 +65,22 @@ async function application(failPersistence = false) {
         } };
       },
     },
-    photos, secureCookies: false,
+    photos, secureCookies: false, reportPhotoAnalyzer: testPhotoAnalyzer,
   });
   closers.push(runtime.close);
   return runtime.app;
 }
 
 async function submitPhoto(agent: ReturnType<typeof request.agent>, categoryId: string) {
+  setTestPhotoAnalysis({
+    categoryId,
+    title: "Damaged curb at the library",
+    description: "The curb ramp has broken concrete and needs repair.",
+  });
   return agent.post("/api/reports")
-    .field("categoryId", categoryId)
-    .field("title", "Damaged curb at the library")
-    .field("description", "The curb ramp has broken concrete and needs repair.")
     .field("location", "Main Street library entrance")
+    .field("latitude", "39.7817")
+    .field("longitude", "-89.6501")
     .attach("photo", PNG, { filename: "../../curb.png", contentType: "image/png" });
 }
 

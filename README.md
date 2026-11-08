@@ -41,7 +41,7 @@ Copy `.env.example` and replace placeholders only in your local ignored `.env.lo
 | `UPLOAD_DIR` | Local photo directory (default `./uploads`). |
 | `APP_ORIGIN` | Public origin (for example `https://civicsignal.example`). Requests that change data must come from this origin or the host that served them; comma-separate multiple origins. Needed behind a TLS-terminating proxy that does not forward `X-Forwarded-Proto`. |
 | `SESSION_TTL_HOURS` | Absolute session lifetime in hours (default `2`). Invalid or non-positive values fall back to the default. |
-| `GEMINI_API_KEY` | Server-only Google Gemini API key. When configured, selecting a photo asks Gemini 3 Flash Preview for an editable category, title, and description suggestion. The resident always chooses the final active category, which determines the receiving organization. Photos and AI classification are optional; text-only reports are accepted. Never use a `VITE_` or `NEXT_PUBLIC_` prefix; the deployment operator must verify the audience and API use meet Google's current terms. |
+| `GEMINI_API_KEY` | Server-only Google Gemini API key. When configured, submitting a report sends the required photo to Gemini 3 Flash Preview, which writes the title and problem description and selects the active category. That category determines the receiving organization, and the server assigns the nearest eligible verified staff member, preferring the report’s municipality and otherwise the closest eligible person in any organization. A cross-organization assignee can open, update, queue, and read attachments for the assigned report. Report submission is unavailable without AI classification. Never use a `VITE_` or `NEXT_PUBLIC_` prefix; the deployment operator must verify the audience and API use meet Google's current terms. |
 | `DISABLE_GEMINI_PHOTO_ANALYSIS` | Optional emergency switch. Set to `true` to disable classification even when `GEMINI_API_KEY` is configured; report submission is unavailable while classification is disabled. |
 | `CONNECTION_STRING` | PostgreSQL URL; takes precedence over `DATABASE_URL` and `POSTGRES_URL`. Use a TLS-enabled Supabase Postgres connection in production. |
 | `DB_PASSWORD` | Alternative for the configured Supabase database host; the server builds a TLS-enabled Postgres URL. |
@@ -79,7 +79,7 @@ pnpm build
 
 ## Safe judge demo
 
-Use local SQLite rather than the public deployment. Create the admin through first-run setup, configure a clearly fictional organization and issue category, verify a fictional staff account, then submit a fictional road or park issue as a resident. If the server API key is configured and the operator has verified that the use meets Google's terms, demonstrate the photo-suggestion request and let the resident decide whether to apply it. Show the report reference, status guidance, a staff update, and the actor-and-time history after moving the status. Do not place credentials in source code or use real resident data. The detailed sequence and submission drafts are in [docs/CAC-SUBMISSION-PACKAGE.md](docs/CAC-SUBMISSION-PACKAGE.md). The reusable [explainer prompt](docs/AI-EXPLAINER-PROMPT.md) and [challenge-improvement prompt](docs/AI-CHALLENGE-IMPROVEMENT-PROMPT.md) are in `docs/`.
+Use local SQLite rather than the public deployment. Create the admin through first-run setup, configure a clearly fictional organization and issue category, verify a fictional staff account, then submit a fictional road or park issue as a resident. If the server API key is configured and the operator has verified that the use meets Google's terms, demonstrate the required photo-and-location submission and show the AI-written title, chosen organization, and assigned staff member. Show the report reference, status guidance, a staff update, and the actor-and-time history after moving the status. Do not place credentials in source code or use real resident data. The detailed sequence and submission drafts are in [docs/CAC-SUBMISSION-PACKAGE.md](docs/CAC-SUBMISSION-PACKAGE.md). The reusable [explainer prompt](docs/AI-EXPLAINER-PROMPT.md) and [challenge-improvement prompt](docs/AI-CHALLENGE-IMPROVEMENT-PROMPT.md) are in `docs/`.
 
 ## Student contribution checklist for the Congressional App Challenge
 
@@ -102,7 +102,7 @@ Before submitting, review and be prepared to explain these areas to demonstrate 
 
 **What AI tools assisted with (disclose accurately):**
 - [Fill in: which AI tools you used, when, and for what specific code/features]
-- [Example: "OpenAI Codex helped with photo-suggestion UI changes and test updates on October 22-23, 2026. I reviewed the changes and can explain the photo-analysis request flow."]
+- [Example: "OpenAI Codex helped with the photo-and-location report submission, AI classification, and test updates in November 2026. I reviewed the changes and can explain the AI classification, organization routing, and nearest-staff assignment flow."]
 
 **What you must not claim:**
 - You wrote all the code yourself if AI generated substantial portions

@@ -14,6 +14,7 @@ import helmet from "helmet";
 import multer from "multer";
 import { z } from "zod";
 
+import type { PhotoAnalyzer } from "./ai-photo-analyzer.js";
 import type { CivicDatabase } from "./database.js";
 import { ApiError, sendError } from "./http.js";
 import type { PhotoStore } from "./photo-store.js";
@@ -53,6 +54,8 @@ type AppOptions = {
   /** Absolute session lifetime in milliseconds; defaults to two hours. */
   sessionTtlMs?: number;
   photoStorageAvailable?: boolean;
+  /** Test seam for the server-side classifier used when a report is submitted. */
+  reportPhotoAnalyzer?: PhotoAnalyzer;
 };
 
 export function createApp(options: AppOptions) {
@@ -173,7 +176,12 @@ export function createApp(options: AppOptions) {
   app.use("/api", createLocationRouter({ database }));
   app.use(
     "/api/reports",
-    createReportsRouter({ database, photos, sessionCookie }),
+    createReportsRouter({
+      database,
+      photos,
+      sessionCookie,
+      ...(options.reportPhotoAnalyzer ? { analyzePhoto: options.reportPhotoAnalyzer } : {}),
+    }),
   );
   app.use("/api/notifications", createNotificationsRouter({ database, sessionCookie }));
   app.use("/api/admin", createAdminRouter({ database, sessionCookie }));

@@ -3,7 +3,12 @@
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cleanupApplications, setupAdministrator, testApplication } from "./helpers";
+import {
+  cleanupApplications,
+  setTestPhotoAnalysis,
+  setupAdministrator,
+  testApplication,
+} from "./helpers";
 
 afterEach(async () => {
   await cleanupApplications();
@@ -56,12 +61,16 @@ describe("administrator controls", () => {
     const roads = categoryList.categories.find(
       (category: { name: string }) => category.name === "Roads and Sidewalks",
     );
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Suspicious spam report about sidewalks",
+      description: "This report contains obvious spam content for moderation.",
+    });
     const created = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Suspicious spam report about sidewalks")
-      .field("description", "This report contains obvious spam content for moderation.")
       .field("location", "Nowhere Street 1")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
         filename: "report.png",
         contentType: "image/png",

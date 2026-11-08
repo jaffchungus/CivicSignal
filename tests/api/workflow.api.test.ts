@@ -3,7 +3,12 @@
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cleanupApplications, setupAdministrator, testApplication } from "./helpers";
+import {
+  cleanupApplications,
+  setTestPhotoAnalysis,
+  setupAdministrator,
+  testApplication,
+} from "./helpers";
 
 afterEach(async () => {
   await cleanupApplications();
@@ -82,13 +87,17 @@ describe("civic report workflow", () => {
     const roads = categoryList.categories.find(
       (category: { name: string }) => category.name === "Roads and Sidewalks",
     );
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Deep pothole on Main Street",
+      description: "A deep pothole near the crosswalk is a hazard for cyclists.",
+    });
 
     const created = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Deep pothole on Main Street")
-      .field("description", "A deep pothole near the crosswalk is a hazard for cyclists.")
       .field("location", "Main Street and 4th Avenue")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
         filename: "pothole.png",
         contentType: "image/png",
@@ -99,6 +108,7 @@ describe("civic report workflow", () => {
       referenceCode: expect.stringMatching(/^CS-\d{4}-\d{4}$/),
       status: "SUBMITTED",
       organization: { name: "Public Works" },
+      assignedTo: { displayName: "Olive Official" },
     });
     expect(created.body.timeline).toHaveLength(1);
     expect(created.body.capabilities).toMatchObject({
@@ -132,19 +142,20 @@ describe("civic report workflow", () => {
       .send({ status: "IN_PROGRESS" })
       .expect(403);
 
+    // Submission auto-assigns the nearest verified staff member, so claiming
+    // again is idempotent and does not add a duplicate history entry.
     const claimed = await officialAgent
       .post(`/api/reports/${reportId}/claim`)
       .expect(200);
     expect(claimed.body.assignedTo).toMatchObject({ displayName: "Olive Official" });
     expect(claimed.body.canClaim).toBe(false);
 
-    // A retry after a lost response is idempotent and does not duplicate history.
     const repeatedClaim = await officialAgent
       .post(`/api/reports/${reportId}/claim`)
       .expect(200);
     expect(repeatedClaim.body.timeline.filter(
       (entry: { action: string }) => entry.action === "REPORT_CLAIMED",
-    )).toHaveLength(1);
+    )).toHaveLength(0);
 
     // Admin assignment is not part of the product; the route must remain absent
     // and the claim flow must keep working without it.
@@ -220,14 +231,13 @@ describe("civic report workflow", () => {
     );
     expect(actions).toEqual([
       "REPORT_CREATED",
-      "REPORT_CLAIMED",
       "REPORT_UPDATE_ADDED",
       "REPORT_STATUS_CHANGED",
       "REPORT_STATUS_CHANGED",
       "REPORT_STATUS_CHANGED",
       "REPORT_STATUS_CHANGED",
     ]);
-    expect(detail.body.timeline[3]).toMatchObject({
+    expect(detail.body.timeline[2]).toMatchObject({
       fromStatus: "SUBMITTED",
       toStatus: "UNDER_REVIEW",
       actor: { displayName: "Olive Official" },
@@ -280,9 +290,6 @@ describe("civic report workflow", () => {
     expect(statusChanges[0].reportId).toBe(reportId);
     expect(
       audit.entries.some((entry: { action: string }) => entry.action === "USER_VERIFIED"),
-    ).toBe(true);
-    expect(
-      audit.entries.some((entry: { action: string }) => entry.action === "REPORT_CLAIMED"),
     ).toBe(true);
   });
 
@@ -347,23 +354,31 @@ describe("civic report workflow", () => {
       (category: { name: string }) => category.name === "Roads and Sidewalks",
     );
 
+    setTestPhotoAnalysis({
+      categoryId: safety.id,
+      title: "Late night noise near the pavilion",
+      description: "Repeated late night noise near the park pavilion on weekends.",
+    });
     const safetyReport = await residentAgent
       .post("/api/reports")
-      .field("categoryId", safety.id)
-      .field("title", "Late night noise near the pavilion")
-      .field("description", "Repeated late night noise near the park pavilion on weekends.")
       .field("location", "Riverside Park pavilion")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
         filename: "safety.png",
         contentType: "image/png",
       });
     expect(safetyReport.status).toBe(201);
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Broken streetlight on Oak Street",
+      description: "The streetlight outside number 12 has been out for a week.",
+    });
     const roadsReport = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Broken streetlight on Oak Street")
-      .field("description", "The streetlight outside number 12 has been out for a week.")
       .field("location", "Oak Street 12")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), {
         filename: "streetlight.png",
         contentType: "image/png",

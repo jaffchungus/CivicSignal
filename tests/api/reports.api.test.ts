@@ -9,6 +9,7 @@ import { MAX_REPORT_PHOTO_BYTES } from "../../shared/contracts";
 import {
   cleanupApplications,
   setupAdministrator,
+  setTestPhotoAnalysis,
   testApplicationWithUploads,
 } from "./helpers";
 
@@ -94,22 +95,22 @@ function categoryByName(categories: Scenario["categories"], name: string) {
   return category!;
 }
 
-function reportFields(categoryId: string, title: string, description: string, location: string) {
-  return { categoryId, title, description, location };
-}
-
 describe("photo attachments", () => {
   it("serves uploaded photos only through the authorized report endpoint", async () => {
     const { app, residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
     const png = Buffer.from(PNG_BASE64, "base64");
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Cracked curb ramp at the library",
+      description: "The curb ramp is cracked and lifts out of place.",
+    });
 
     const created = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Cracked curb ramp at the library")
-      .field("description", "The curb ramp is cracked and lifts out of place.")
       .field("location", "Main Street library entrance")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", png, { filename: "curb-ramp.png", contentType: "image/png" })
       .expect(201);
 
@@ -162,16 +163,19 @@ describe("photo attachments", () => {
     const availableCategories = await residentAgent.get("/api/categories").expect(200);
     expect(availableCategories.body.categories.some((item: { id: string }) => item.id === roads.id)).toBe(false);
 
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Pothole on a local road",
+      description: "The road surface is broken and needs an inspection.",
+    });
     const rejected = await residentAgent.post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Pothole on a local road")
-      .field("description", "The road surface is broken and needs an inspection.")
       .field("location", "Main Street")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", png, { filename: "curb-ramp.png", contentType: "image/png" })
       .expect(422);
-    expect(rejected.body.error.fieldErrors.categoryId).toContain(
-      "Choose a category routed to an active organization.",
-    );
+    expect(rejected.body.error.code).toBe("CATEGORY_UNRESOLVED");
+    expect(rejected.body.error.fieldErrors.photo).toBeDefined();
   });
 
   it("rejects a non-image attachment with a clean 415 and persists nothing", async () => {
@@ -180,10 +184,9 @@ describe("photo attachments", () => {
 
     const rejected = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Report with a bogus attachment")
-      .field("description", "This upload should be rejected before anything is saved.")
       .field("location", "Nowhere Street 1")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("definitely not an image"), {
         filename: "notes.txt",
         contentType: "text/plain",
@@ -203,10 +206,9 @@ describe("photo attachments", () => {
 
     const rejected = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Report with spoofed image content")
-      .field("description", "This file claims to be PNG but contains plain text.")
       .field("location", "Nowhere Street 3")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.from("not actually a png"), {
         filename: "photo.png",
         contentType: "image/png",
@@ -225,10 +227,9 @@ describe("photo attachments", () => {
 
     const rejected = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Report with a giant attachment")
-      .field("description", "This upload exceeds the five megabyte attachment limit.")
       .field("location", "Nowhere Street 2")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
       .attach("photo", Buffer.alloc(MAX_REPORT_PHOTO_BYTES + 1, 0x42), {
         filename: "huge.png",
         contentType: "image/png",
@@ -253,15 +254,16 @@ describe("report filtering", () => {
     const trash = categoryByName(categories, "Trash and Sanitation");
     const parks = categoryByName(categories, "Parks and Recreation");
 
-    const create = (categoryId: string, title: string, description: string, location: string) =>
-      residentAgent
+    const create = (categoryId: string, title: string, description: string, location: string) => {
+      setTestPhotoAnalysis({ categoryId, title, description });
+      return residentAgent
         .post("/api/reports")
-        .field("categoryId", categoryId)
-        .field("title", title)
-        .field("description", description)
         .field("location", location)
+        .field("latitude", "39.7817")
+        .field("longitude", "-89.6501")
         .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "report.png", contentType: "image/png" })
         .expect(201);
+    };
 
     const pothole = await create(
       roads.id,
@@ -440,45 +442,57 @@ describe("report filtering", () => {
   });
 });
 
-describe("optional photos, AI problem detection, and configured category routing", () => {
-  it("accepts a text-only report and routes it only to the selected category's organization", async () => {
+describe("required photos, AI analysis, and configured category routing", () => {
+  it("requires a photo and a GPS pin before AI can route a report", async () => {
+    const { residentAgent } = await scenario();
+
+    const noPhoto = await residentAgent
+      .post("/api/reports")
+      .field("location", "Main St and 1st Ave")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .expect(422);
+    expect(noPhoto.body.error.fieldErrors.photo).toContain("Upload or take a photo of the issue.");
+
+    const noPin = await residentAgent
+      .post("/api/reports")
+      .field("location", "Main St and 1st Ave")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
+      .expect(422);
+    expect(Object.keys(noPin.body.error.fieldErrors)).toEqual(
+      expect.arrayContaining(["latitude", "longitude"]),
+    );
+  });
+
+  it("ignores resident-supplied title, description, category, and routing fields", async () => {
     const { residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
+    const parks = categoryByName(categories, "Parks and Recreation");
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "AI title from the photo",
+      description: "AI description from the photo.",
+    });
 
     const created = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Report without a photo")
-      .field("description", "The road surface is broken and needs an inspection.")
+      .field("title", "Resident-supplied title")
+      .field("description", "Resident-supplied description that must not win.")
+      .field("categoryId", parks.id)
+      .field("routingSource", "RESIDENT")
       .field("location", "Main St and 1st Ave")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
       .expect(201);
 
     expect(created.body).toMatchObject({
-      status: "SUBMITTED",
+      title: "AI title from the photo",
+      description: "AI description from the photo.",
+      category: { id: roads.id },
       organization: { name: "Public Works" },
-      assignedTo: null,
-      attachments: [],
-      routing: { source: "RESIDENT", reviewRequired: false },
+      routing: { source: "AI" },
     });
-    expect(created.body.nearestRepresentative).toBeUndefined();
-  });
-
-  it("protects required title and description fields", async () => {
-    const { residentAgent, categories } = await scenario();
-    const roads = categoryByName(categories, "Roads and Sidewalks");
-
-    const response = await residentAgent
-      .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "")
-      .field("description", "short")
-      .field("location", "Main St and 1st Ave")
-      .expect(422);
-
-    expect(response.body.error.code).toBe("VALIDATION_ERROR");
-    expect(Object.keys(response.body.error.fieldErrors)).toEqual(
-      expect.arrayContaining(["title", "description"]),
-    );
   });
 
   it("detects the problem in an uploaded photo using AI logic via /api/reports/analyze-photo", async () => {
@@ -564,19 +578,23 @@ describe("optional photos, AI problem detection, and configured category routing
   it("persists explicit AI routing provenance without inventing a representative", async () => {
     const { residentAgent, categories } = await scenario();
     const roads = categoryByName(categories, "Roads and Sidewalks");
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Broken asphalt near intersection",
+      description: "Deep cracking on asphalt road.",
+      confidence: 0.4,
+    });
 
     const created = await residentAgent
       .post("/api/reports")
-      .field("categoryId", roads.id)
-      .field("title", "Broken asphalt near intersection")
-      .field("description", "Deep cracking on asphalt road.")
       .field("location", "Main Street and First Avenue")
-      .field("routingSource", "AI")
-      .field("routingConfidence", "0.4")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
       .expect(201);
 
     expect(created.body.organization).toMatchObject({ name: "Public Works" });
-    expect(created.body.assignedTo).toBeNull();
+    expect(created.body.assignedTo).toMatchObject({ displayName: "Olive Official" });
     expect(created.body.routing).toEqual({
       source: "AI",
       confidence: 0.4,
@@ -589,5 +607,26 @@ describe("optional photos, AI problem detection, and configured category routing
       .expect(200);
     expect(detail.body.nearestRepresentative).toBeUndefined();
     expect(detail.body.routing).toEqual(created.body.routing);
+  });
+
+  it("rejects an image the AI classifies as spam without persisting a report", async () => {
+    const { residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Meme image",
+      description: "Unrelated image content.",
+      isSpam: true,
+    });
+
+    const rejected = await residentAgent
+      .post("/api/reports")
+      .field("location", "Main Street")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "spam.png", contentType: "image/png" })
+      .expect(422);
+    expect(rejected.body.error.code).toBe("IMAGE_NOT_ACCEPTED");
+    expect((await residentAgent.get("/api/reports?scope=mine").expect(200)).body.reports).toHaveLength(0);
   });
 });

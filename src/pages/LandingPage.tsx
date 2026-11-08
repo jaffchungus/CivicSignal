@@ -64,7 +64,7 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
           <p className="eyebrow">Non-emergency community reporting</p>
           <h1>Report a local issue. Follow its updates.</h1>
           <p className="landing-lede">
-            Send a non-emergency report to an organization configured for this community. Come back here to see any updates its staff record.
+            Send a photo and your location. AI identifies the issue, writes the report, and routes it to the right organization and staff member. Come back here to see any updates they record.
           </p>
           <div className="button-row landing-actions">
             <Link className="button primary" to="/reports/new">
@@ -87,15 +87,15 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
           <li>
             <span className="landing-step-number">01</span>
             <div>
-              <h3>Choose what needs attention</h3>
-              <p>Pick from the categories available in this community. Each one is connected to a receiving organization by an administrator.</p>
+              <h3>Take one photo</h3>
+              <p>Show the problem. AI identifies the issue and writes the title and description, so there are no long fields to fill in.</p>
             </div>
           </li>
           <li>
             <span className="landing-step-number">02</span>
             <div>
-              <h3>Send the details</h3>
-              <p>Add a description and location, with an optional photo. If enabled, an AI suggestion can help draft the category and description for you to review.</p>
+              <h3>Attach your location</h3>
+              <p>Tap the location button and send. CivicSignal routes the report to the right organization and the nearest available verified staff member.</p>
             </div>
           </li>
           <li>
