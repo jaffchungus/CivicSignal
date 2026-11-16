@@ -27,6 +27,7 @@ const PNG_BASE64 =
 type Scenario = {
   app: Awaited<ReturnType<typeof testApplicationWithUploads>>["app"];
   uploadDirectory: string;
+  database: Awaited<ReturnType<typeof testApplicationWithUploads>>["database"];
   admin: ReturnType<typeof request.agent>;
   officialAgent: ReturnType<typeof request.agent>;
   residentAgent: ReturnType<typeof request.agent>;
@@ -35,7 +36,7 @@ type Scenario = {
 
 /** Admin + verified Public Works official + active resident, with test routing configured. */
 async function scenario(): Promise<Scenario> {
-  const { app, uploadDirectory } = await testApplicationWithUploads();
+  const { app, uploadDirectory, database } = await testApplicationWithUploads();
   const admin = await setupAdministrator(app);
 
   const { body: organizationList } = await request(app)
@@ -82,6 +83,7 @@ async function scenario(): Promise<Scenario> {
   return {
     app,
     uploadDirectory,
+    database,
     admin,
     officialAgent,
     residentAgent,
@@ -656,5 +658,55 @@ describe("required photos, AI analysis, and configured category routing", () => 
     expect(receipt).toMatchObject({ reportId: created.body.id, read: false });
     expect(receipt.title).toContain(created.body.referenceCode);
     expect(receipt.message).toContain(created.body.organization.name);
+  });
+});
+describe("reference code allocation", () => {
+  function submitIssue(
+    residentAgent: ReturnType<typeof request.agent>,
+    categoryId: string,
+  ) {
+    setTestPhotoAnalysis({
+      categoryId,
+      title: "Cracked curb ramp",
+      description: "The curb ramp is cracked and lifts out of place.",
+    });
+    return residentAgent
+      .post("/api/reports")
+      .field("location", "Main Street library entrance")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), {
+        filename: "curb-ramp.png",
+        contentType: "image/png",
+      })
+      .expect(201);
+  }
+
+  it("issues a fresh code when the counter has fallen behind the codes in use", async () => {
+    const { residentAgent, categories, database } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+    const first = await submitIssue(residentAgent, roads.id);
+
+    // A restored or wiped settings row leaves the counter below issued codes.
+    await database
+      .prepare("UPDATE settings SET value = ? WHERE key = ?")
+      .run("0", "report_reference_counter");
+
+    const second = await submitIssue(residentAgent, roads.id);
+    expect(second.body.referenceCode).not.toBe(first.body.referenceCode);
+    expect(second.body.referenceCode.endsWith("-0002")).toBe(true);
+  });
+
+  it("repairs a counter that is not a number instead of failing the submission", async () => {
+    const { residentAgent, categories, database } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+    const first = await submitIssue(residentAgent, roads.id);
+
+    await database
+      .prepare("UPDATE settings SET value = ? WHERE key = ?")
+      .run("legacy-counter", "report_reference_counter");
+
+    const second = await submitIssue(residentAgent, roads.id);
+    expect(second.body.referenceCode).not.toBe(first.body.referenceCode);
   });
 });

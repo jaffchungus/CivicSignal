@@ -293,7 +293,17 @@ describe.each(["sqlite", "postgres"] as const)("report persistence (%s)", (adapt
     expect(rejected.status).toBe(503);
     expect(rejected.body.error.code).toBe("PERSISTENCE_UNAVAILABLE");
     expect(remove).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledExactlyOnceWith("Photo cleanup failed after report persistence rolled back.");
+    // The step diagnostic names the failing operation; the cleanup warning stays
+    // generic so storage details never reach the log.
+    expect(log).toHaveBeenCalledWith("Photo cleanup failed after report persistence rolled back.");
+    expect(log).toHaveBeenCalledWith(
+      "[reports] report submission failed",
+      expect.objectContaining({
+        route: "POST /api/reports",
+        step: "insert-report-row",
+        error: expect.objectContaining({ message: expect.any(String) }),
+      }),
+    );
     expect(JSON.stringify(rejected.body)).not.toContain("private storage details");
   }, 15_000);
 

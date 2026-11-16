@@ -154,3 +154,73 @@ describe("Postgres adapter", () => {
     expect(pools[1].end).toHaveBeenCalledOnce();
   });
 });
+describe("Postgres adapter connection retries", () => {
+  function connectionError(message = "Connection terminated unexpectedly") {
+    return Object.assign(new Error(message), { code: "ECONNRESET" });
+  }
+
+  it("retries a single statement once after a dropped connection", async () => {
+    const database = await createPostgresDatabase("postgresql://test");
+    pools[0].query.mockRejectedValueOnce(connectionError());
+    await expect(database.prepare("SELECT ? AS value").all(1)).resolves.toEqual([{ value: 1 }]);
+    expect(pools[0].query).toHaveBeenCalledTimes(2);
+    await database.close();
+  });
+
+  it("does not retry a statement that failed for a non-connection reason", async () => {
+    const database = await createPostgresDatabase("postgresql://test");
+    pools[0].query.mockRejectedValueOnce(
+      Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }),
+    );
+    await expect(database.prepare("SELECT ?").all(1)).rejects.toThrow("duplicate key value");
+    expect(pools[0].query).toHaveBeenCalledTimes(1);
+    await database.close();
+  });
+
+  it("retries a transaction once after a dropped connection without compensating", async () => {
+    const database = await createPostgresDatabase("postgresql://test");
+    const client = pools[0].client;
+    client.query.mockClear();
+    client.release.mockClear();
+    client.query.mockImplementationOnce(async (sql: string) => {
+      if (sql === "BEGIN") throw connectionError();
+      return { rows: [] };
+    });
+    const compensate = vi.fn(async () => undefined);
+    await expect(database.transaction(async () => "kept", compensate)).resolves.toBe("kept");
+    expect(compensate).not.toHaveBeenCalled();
+    expect(client.query.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      "ROLLBACK",
+      "BEGIN",
+      "COMMIT",
+    ]);
+    expect(client.release).toHaveBeenCalledTimes(2);
+    await database.close();
+  });
+
+  it("compensates once when the retried transaction fails again", async () => {
+    const database = await createPostgresDatabase("postgresql://test");
+    const client = pools[0].client;
+    client.query.mockClear();
+    client.release.mockClear();
+    const dropped = connectionError();
+    client.query.mockImplementation(async (sql: string) => {
+      if (sql === "BEGIN") throw dropped;
+      return { rows: [] };
+    });
+    const compensate = vi.fn(async () => undefined);
+    await expect(database.transaction(async () => "unused", compensate)).rejects.toBe(dropped);
+    expect(compensate).toHaveBeenCalledOnce();
+    await database.close();
+  });
+
+  it("retries when acquiring the pooled connection fails transiently", async () => {
+    const database = await createPostgresDatabase("postgresql://test");
+    pools[0].connect.mockClear();
+    pools[0].connect.mockRejectedValueOnce(new Error("timeout exceeded when trying to connect"));
+    await expect(database.transaction(async () => "connected")).resolves.toBe("connected");
+    expect(pools[0].connect).toHaveBeenCalledTimes(2);
+    await database.close();
+  });
+});

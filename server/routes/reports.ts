@@ -26,6 +26,7 @@ import {
   recordAudit,
   recordReportEvent,
 } from "../activity.js";
+import { createStepTrace, runStep } from "../diagnostics.js";
 import { ApiError, isoTime, pathId } from "../http.js";
 import { assignNearestStaff, findNearestMunicipality, routeReportToOrganization } from "../jurisdiction.js";
 import { loadReportPriorities, reportPriorityRank } from "../report-priority.js";
@@ -518,23 +519,103 @@ async function serializeDetail(
   };
 }
 
-/** Must run inside the same transaction as the report insert. */
-async function nextReferenceCode(database: CivicDatabase): Promise<string> {
-  // Seed from existing reports once, preserving numbering on upgraded databases.
-  // The unique settings key and atomic UPDATE serialize concurrent allocations
-  // on Postgres across instances, and on SQLite within its write transaction.
-  await database.prepare(
-    `INSERT INTO settings (key, value)
-     VALUES ('report_reference_counter', CAST((SELECT COUNT(*) FROM reports) AS TEXT))
-     ON CONFLICT (key) DO NOTHING`,
-  ).run();
-  const { value } = (await database.prepare(
-    `UPDATE settings SET value = CAST(CAST(value AS BIGINT) + 1 AS TEXT)
-     WHERE key = 'report_reference_counter' RETURNING value`,
-  ).get()) as { value: string };
-  return `CS-${new Date().getFullYear()}-${value.padStart(4, "0")}`;
+const REFERENCE_COUNTER_KEY = "report_reference_counter";
+const REFERENCE_CODE_YEAR_PREFIX = "CS-";
+/** Extra allocations before giving up when the counter and stored codes disagree. */
+const REFERENCE_ALLOCATION_ATTEMPTS = 10;
+
+/** A stored counter is only usable when it is a non-negative integer. */
+function parseReferenceCounter(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+/** The numeric part of a code issued under this year's prefix, if it has one. */
+function referenceCodeSuffix(code: unknown, yearPrefix: string): number | null {
+  if (typeof code !== "string" || !code.startsWith(yearPrefix)) return null;
+  const suffix = code.slice(yearPrefix.length);
+  if (!/^\d+$/.test(suffix)) return null;
+  const parsed = Number(suffix);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/**
+ * Must run inside the same transaction as the report insert.
+ *
+ * The counter is seeded from the highest code already issued for the current
+ * year, never from COUNT(*): a deleted report (or a restored or wiped settings
+ * row) makes COUNT(*) fall behind the codes in use, and every allocation then
+ * collides with the UNIQUE reference_code. Because the report transaction rolls
+ * back, such a collision is permanent instead of self-healing. A non-numeric
+ * legacy counter is repaired for the same reason. The increment itself stays a
+ * single atomic UPDATE, so concurrent submissions serialize on the settings row,
+ * and the issued code is re-checked against the UNIQUE index before it is
+ * returned.
+ */
+async function nextReferenceCode(database: CivicDatabase): Promise<string> {
+  const yearPrefix = `${REFERENCE_CODE_YEAR_PREFIX}${new Date().getFullYear()}-`;
+
+  const usedCodes = (await database
+    .prepare("SELECT reference_code FROM reports WHERE reference_code LIKE ?")
+    .all(`${yearPrefix}%`)) as Array<{ reference_code: string }>;
+  let highestUsed = 0;
+  for (const row of usedCodes) {
+    const suffix = referenceCodeSuffix(row.reference_code, yearPrefix);
+    if (suffix !== null && suffix > highestUsed) highestUsed = suffix;
+  }
+
+  const counterRow = (await database
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(REFERENCE_COUNTER_KEY)) as { value: string } | undefined;
+  const counter = parseReferenceCounter(counterRow?.value);
+
+  if (!counterRow) {
+    await database
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO NOTHING`,
+      )
+      .run(REFERENCE_COUNTER_KEY, String(highestUsed));
+  } else if (counter === null) {
+    // Repair so the atomic CAST below cannot fail on a legacy value.
+    await database
+      .prepare("UPDATE settings SET value = ? WHERE key = ?")
+      .run(String(highestUsed), REFERENCE_COUNTER_KEY);
+  } else if (counter < highestUsed) {
+    // Raise only: a concurrent allocation may already have moved it further.
+    await database
+      .prepare(
+        `UPDATE settings SET value = ?
+         WHERE key = ? AND CAST(value AS BIGINT) < ?`,
+      )
+      .run(String(highestUsed), REFERENCE_COUNTER_KEY, highestUsed);
+  }
+
+  for (let attempt = 0; attempt < REFERENCE_ALLOCATION_ATTEMPTS; attempt += 1) {
+    const allocated = (await database
+      .prepare(
+        `UPDATE settings SET value = CAST(CAST(value AS BIGINT) + 1 AS TEXT)
+         WHERE key = ? RETURNING value`,
+      )
+      .get(REFERENCE_COUNTER_KEY)) as { value: string } | undefined;
+    const value = parseReferenceCounter(allocated?.value);
+    if (value === null) {
+      throw new Error("The report reference counter is not a non-negative integer.");
+    }
+    const code = `${yearPrefix}${String(value).padStart(4, "0")}`;
+    const taken = (await database
+      .prepare("SELECT id FROM reports WHERE reference_code = ?")
+      .get(code)) as { id: string } | undefined;
+    // Skipping a number is harmless; reissuing one violates the UNIQUE index.
+    if (!taken) return code;
+  }
+  throw new Error(
+    `No unique report reference code after ${REFERENCE_ALLOCATION_ATTEMPTS} attempts.`,
+  );
+}
 function reporterReceiptText(
   referenceCode: string,
   organizationName: string,
@@ -649,40 +730,58 @@ export function createReportsRouter(deps: {
   async function submitReport(
     request: import("express").Request,
     reporterUserId: string | null,
-    guestToken?: string,
+    options: { route: string; guestToken?: string },
   ): Promise<{ report: Awaited<ReturnType<typeof serializeDetail>>; guestAccessToken?: string }> {
-    const input = createReportSchema.parse(request.body);
-    const file = request.file;
-    if (!file) {
-      throw new ApiError(422, "VALIDATION_ERROR", "The request contains invalid fields.", {
-        photo: ["Upload or take a photo of the issue."],
-      });
-    }
-    const fileContentType = actualImageType(file.buffer);
-    if (!fileContentType || fileContentType !== file.mimetype.toLowerCase()) {
-      throw new ApiError(
-        415,
-        "INVALID_IMAGE_CONTENT",
-        "The file contents do not match a supported image type.",
-      );
-    }
+    // Every step is named in the failure log, so a production 500 identifies the
+    // exact operation that broke instead of only "Internal Server Error".
+    const trace = createStepTrace({ route: options.route, userId: reporterUserId });
+    const guestToken = options.guestToken;
+    trace.fields.guest = Boolean(guestToken);
+    const { input, file, fileContentType } = await runStep(trace, "validate-input", async () => {
+      const parsed = createReportSchema.parse(request.body);
+      const uploaded = request.file;
+      if (!uploaded) {
+        throw new ApiError(422, "VALIDATION_ERROR", "The request contains invalid fields.", {
+          photo: ["Upload or take a photo of the issue."],
+        });
+      }
+      const detectedType = actualImageType(uploaded.buffer);
+      if (!detectedType || detectedType !== uploaded.mimetype.toLowerCase()) {
+        throw new ApiError(
+          415,
+          "INVALID_IMAGE_CONTENT",
+          "The file contents do not match a supported image type.",
+        );
+      }
+      trace.fields.photoBytes = uploaded.size;
+      trace.fields.photoType = detectedType;
+      return { input: parsed, file: uploaded, fileContentType: detectedType };
+    });
 
-    const categories = (await database
-      .prepare(
-        `SELECT categories.id, categories.name, categories.description,
-                organizations.name AS "organizationName"
-         FROM categories
-         JOIN organizations ON organizations.id = categories.organization_id
-         WHERE categories.active = 1 AND organizations.active = 1
-         ORDER BY categories.name`,
-      )
-      .all()) as Array<{
-      id: string;
-      name: string;
-      description: string | null;
-      organizationName: string;
-    }>;
-    const analysis = await analyzePhoto(file.buffer, fileContentType, categories);
+    const categories = await runStep(trace, "load-categories", async () =>
+      (await database
+        .prepare(
+          `SELECT categories.id, categories.name, categories.description,
+                  organizations.name AS "organizationName"
+           FROM categories
+           JOIN organizations ON organizations.id = categories.organization_id
+           WHERE categories.active = 1 AND organizations.active = 1
+           ORDER BY categories.name`,
+        )
+        .all()) as Array<{
+        id: string;
+        name: string;
+        description: string | null;
+        organizationName: string;
+      }>,
+    );
+    trace.fields.activeCategories = categories.length;
+
+    const analysis = await runStep(trace, "analyze-photo", () =>
+      analyzePhoto(file.buffer, fileContentType, categories),
+    );
+    trace.fields.suggestedCategoryId = analysis.suggestedCategoryId || null;
+    trace.fields.analysisConfidence = analysis.confidence;
     if (analysis.isSpam) {
       throw new ApiError(
         422,
@@ -702,21 +801,26 @@ export function createReportsRouter(deps: {
         { photo: ["AI could not classify this photo. Try another photo."] },
       );
     }
+    const suggestedCategoryId = analysis.suggestedCategoryId;
 
     const coordinates = { latitude: input.latitude, longitude: input.longitude };
-    const routing = await routeReportToOrganization(
-      database,
-      analysis.suggestedCategoryId,
-      null,
-      coordinates,
+    const routing = await runStep(trace, "route-organization", () =>
+      routeReportToOrganization(database, suggestedCategoryId, null, coordinates),
     );
-    const municipality = await findNearestMunicipality(database, coordinates);
+    trace.fields.categoryId = routing.categoryId;
+    trace.fields.organizationId = routing.organizationId;
+    const municipality = await runStep(trace, "resolve-municipality", () =>
+      findNearestMunicipality(database, coordinates),
+    );
     const municipalityId = municipality?.id ?? routing.municipalityId;
-    const assignee = await assignNearestStaff(database, {
-      coordinates,
-      reportMunicipalityId: municipalityId,
-      fallbackOrganizationId: routing.organizationId,
-    });
+    const assignee = await runStep(trace, "assign-staff", () =>
+      assignNearestStaff(database, {
+        coordinates,
+        reportMunicipalityId: municipalityId,
+        fallbackOrganizationId: routing.organizationId,
+      }),
+    );
+    trace.fields.assigneeUserId = assignee?.id ?? null;
 
     const category = {
       id: routing.categoryId,
@@ -731,186 +835,223 @@ export function createReportsRouter(deps: {
     const accuracyMeters = input.accuracyMeters ?? null;
     const now = Date.now();
     const reportId = randomUUID();
-    const storedPhoto = await photos.save(file.buffer, file.originalname, fileContentType);
-
-    const imageEmbedding = await generateImageEmbedding(file.buffer);
-    const similarReport = await findSimilarReports(
-      database,
-      reportId,
-      latitude,
-      longitude,
-      category.id,
-      imageEmbedding,
+    trace.reportId = reportId;
+    const storedPhoto = await runStep(trace, "save-photo", () =>
+      photos.save(file.buffer, file.originalname, fileContentType),
     );
+    trace.fields.storedPhoto = storedPhoto.storedName.slice(0, 40);
+
+    const imageEmbedding = await runStep(trace, "embed-photo", () =>
+      generateImageEmbedding(file.buffer),
+    );
+    const similarReport = await runStep(trace, "find-similar-reports", () =>
+      findSimilarReports(
+        database,
+        reportId,
+        latitude,
+        longitude,
+        category.id,
+        imageEmbedding,
+      ),
+    );
+    trace.fields.similarReportId = similarReport?.similarReportId ?? null;
     const routingReviewRequired = analysis.confidence < 0.6;
 
     let referenceCode = "";
     let pushRecipients: string[] = [];
-    await database.transaction(async () => {
-      referenceCode = await nextReferenceCode(database);
-      await database
-        .prepare(
-          `INSERT INTO reports
+    await runStep(trace, "persist-report", () =>
+      database.transaction(async () => {
+        referenceCode = await runStep(trace, "next-reference-code", () =>
+          nextReferenceCode(database),
+        );
+        trace.referenceCode = referenceCode;
+        await runStep(trace, "insert-report-row", async () => {
+          await database
+            .prepare(
+              `INSERT INTO reports
             (id, reference_code, title, description, location, latitude, longitude, accuracy_meters, category_id,
              organization_id, municipality_id, reporter_user_id, assigned_user_id, status,
              moderation_status, image_embedding, similar_report_id, similarity_score,
              routing_source, routing_confidence, routing_review_required, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', 'VISIBLE', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          reportId,
-          referenceCode,
-          title,
-          description,
-          location,
-          latitude,
-          longitude,
-          accuracyMeters,
-          category.id,
-          category.organization_id,
-          municipalityId,
-          reporterUserId,
-          assignee?.id ?? null,
-          serializeEmbedding(imageEmbedding),
-          similarReport?.similarReportId ?? null,
-          similarReport?.similarityScore ?? null,
-          "AI",
-          analysis.confidence,
-          routingReviewRequired ? 1 : 0,
-          now,
-          now,
-        );
-
-      if (guestToken) {
-        await database
-          .prepare(
-            `INSERT INTO guest_report_access (report_id, token_hash, created_at, expires_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .run(reportId, hashGuestToken(guestToken), now, now + 90 * 24 * 60 * 60 * 1000);
-      }
-
-      await recordReportEvent(database, {
-        reportId,
-        actorUserId: reporterUserId,
-        action: "REPORT_CREATED",
-        toStatus: "SUBMITTED",
-        message: title,
-      });
-
-      if (storedPhoto && fileContentType) {
-        await database
-          .prepare(
-            `INSERT INTO attachments
-              (id, report_id, filename, stored_name, content_type, size_bytes, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            randomUUID(),
-            reportId,
-            file.originalname,
-            storedPhoto.storedName,
-            fileContentType,
-            file.size,
-            now,
-          );
-      }
-
-      if (reporterUserId) {
-        const receipt = reporterReceiptText(
-          referenceCode,
-          routing.organizationName,
-          assignee?.displayName ?? null,
-        );
-        await createNotification(database, {
-          userId: reporterUserId,
-          reportId,
-          type: "REPORT_RECEIVED",
-          title: receipt.title,
-          message: receipt.message,
-          deferPush: true,
+            )
+            .run(
+              reportId,
+              referenceCode,
+              title,
+              description,
+              location,
+              latitude,
+              longitude,
+              accuracyMeters,
+              category.id,
+              category.organization_id,
+              municipalityId,
+              reporterUserId,
+              assignee?.id ?? null,
+              serializeEmbedding(imageEmbedding),
+              similarReport?.similarReportId ?? null,
+              similarReport?.similarityScore ?? null,
+              "AI",
+              analysis.confidence,
+              routingReviewRequired ? 1 : 0,
+              now,
+              now,
+            );
         });
-      }
 
-      pushRecipients = await notifyOrganization(database, category.organization_id, {
-        reportId,
-        type: "REPORT_SUBMITTED",
-        title: `New report: ${title}`,
-        message: `${referenceCode} was submitted to ${category.name} and needs review.${assignee ? ` Assigned to ${assignee.displayName} (${assignee.organizationName}).` : ""}`,
-      }, true);
-
-      if (assignee && assignee.organizationId !== routing.organizationId) {
-        await createNotification(database, {
-          userId: assignee.id,
-          reportId,
-          type: "REPORT_ASSIGNED",
-          title: `Assigned to you: ${referenceCode}`,
-          message: `${referenceCode} was routed to ${routing.organizationName} and assigned to you as the nearest eligible staff member.`,
-          deferPush: true,
-        });
-        pushRecipients.push(assignee.id);
-      }
-
-      // Check if this is a persistent problem and notify appropriate staff.
-      // Detection is best-effort; a failure must not roll back the report.
-      if (similarReport) {
-        try {
-          const persistenceCheck = await detectPersistentProblem(database, reportId);
-          if (persistenceCheck.isPersistent) {
-            // Notify the staff who handled the original similar report
-            const originalReport = (await database
+        if (guestToken) {
+          await runStep(trace, "insert-guest-access", async () => {
+            await database
               .prepare(
-                `SELECT assigned_user_id, reporter_user_id
+                `INSERT INTO guest_report_access (report_id, token_hash, created_at, expires_at)
+                 VALUES (?, ?, ?, ?)`,
+              )
+              .run(reportId, hashGuestToken(guestToken), now, now + 90 * 24 * 60 * 60 * 1000);
+          });
+        }
+
+        await runStep(trace, "record-created-event", () =>
+          recordReportEvent(database, {
+            reportId,
+            actorUserId: reporterUserId,
+            action: "REPORT_CREATED",
+            toStatus: "SUBMITTED",
+            message: title,
+          }),
+        );
+
+        if (storedPhoto && fileContentType) {
+          await runStep(trace, "insert-attachment", async () => {
+            await database
+              .prepare(
+                `INSERT INTO attachments
+                  (id, report_id, filename, stored_name, content_type, size_bytes, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                randomUUID(),
+                reportId,
+                file.originalname,
+                storedPhoto.storedName,
+                fileContentType,
+                file.size,
+                now,
+              );
+          });
+        }
+
+        if (reporterUserId) {
+          await runStep(trace, "notify-reporter", async () => {
+            const receipt = reporterReceiptText(
+              referenceCode,
+              routing.organizationName,
+              assignee?.displayName ?? null,
+            );
+            await createNotification(database, {
+              userId: reporterUserId,
+              reportId,
+              type: "REPORT_RECEIVED",
+              title: receipt.title,
+              message: receipt.message,
+              deferPush: true,
+            });
+          });
+        }
+
+        pushRecipients = await runStep(trace, "notify-organization", () =>
+          notifyOrganization(database, category.organization_id, {
+            reportId,
+            type: "REPORT_SUBMITTED",
+            title: `New report: ${title}`,
+            message: `${referenceCode} was submitted to ${category.name} and needs review.${assignee ? ` Assigned to ${assignee.displayName} (${assignee.organizationName}).` : ""}`,
+          }, true),
+        );
+
+        if (assignee && assignee.organizationId !== routing.organizationId) {
+          await runStep(trace, "notify-assignee", async () => {
+            await createNotification(database, {
+              userId: assignee.id,
+              reportId,
+              type: "REPORT_ASSIGNED",
+              title: `Assigned to you: ${referenceCode}`,
+              message: `${referenceCode} was routed to ${routing.organizationName} and assigned to you as the nearest eligible staff member.`,
+              deferPush: true,
+            });
+            pushRecipients.push(assignee.id);
+          });
+        }
+
+        // Check if this is a persistent problem and notify appropriate staff.
+        // Detection is best-effort; a failure must not roll back the report.
+        if (similarReport) {
+          try {
+            const persistenceCheck = await runStep(trace, "detect-persistent-problem", () =>
+              detectPersistentProblem(database, reportId),
+            );
+            if (persistenceCheck.isPersistent) {
+              // Notify the staff who handled the original similar report
+              const originalReport = (await database
+                .prepare(
+                  `SELECT assigned_user_id, reporter_user_id
                  FROM reports
                  WHERE id = ?`,
-              )
-              .get(similarReport.similarReportId)) as
-              | { assigned_user_id: string | null; reporter_user_id: string | null }
-              | undefined;
+                )
+                .get(similarReport.similarReportId)) as
+                | { assigned_user_id: string | null; reporter_user_id: string | null }
+                | undefined;
 
-            if (originalReport?.assigned_user_id) {
-              await createNotification(database, {
-                userId: originalReport.assigned_user_id,
-                reportId,
-                type: "PERSISTENT_PROBLEM",
-                title: `Persistent problem detected: ${referenceCode}`,
-                message: `This report appears to be a repeat of a similar issue you previously handled. ${persistenceCheck.relatedReportCount} related reports have been submitted for this location and category.`,
-                deferPush: true,
-              });
-              pushRecipients.push(originalReport.assigned_user_id);
+              if (originalReport?.assigned_user_id) {
+                await createNotification(database, {
+                  userId: originalReport.assigned_user_id,
+                  reportId,
+                  type: "PERSISTENT_PROBLEM",
+                  title: `Persistent problem detected: ${referenceCode}`,
+                  message: `This report appears to be a repeat of a similar issue you previously handled. ${persistenceCheck.relatedReportCount} related reports have been submitted for this location and category.`,
+                  deferPush: true,
+                });
+                pushRecipients.push(originalReport.assigned_user_id);
+              }
             }
+          } catch {
+            // Persistent-problem detection is optional; never fail the report.
           }
-        } catch {
-          // Persistent-problem detection is optional; never fail the report.
         }
-      }
-    }, async () => {
-      if (storedPhoto) {
-        try {
-          await photos.remove(storedPhoto.storedName);
-        } catch {
-          console.error("Photo cleanup failed after report persistence rolled back.");
+      }, async () => {
+        if (storedPhoto) {
+          try {
+            await photos.remove(storedPhoto.storedName);
+          } catch {
+            console.error("Photo cleanup failed after report persistence rolled back.");
+          }
         }
-      }
-    });
+      }),
+    );
 
-    if (reporterUserId) {
+    const row = await runStep(trace, "load-report", () => loadReport(database, reportId));
+    const viewer = { id: reporterUserId ?? "", role: "RESIDENT" as const, organizationId: null };
+    const report = await runStep(trace, "serialize-report", () =>
+      serializeDetail(database, row, viewer),
+    );
+    await runStep(trace, "push-receipt", async () => {
+      if (!reporterUserId) return;
       const receipt = reporterReceiptText(
         referenceCode,
         routing.organizationName,
         assignee?.displayName ?? null,
       );
       await sendWebPushToUser(database, reporterUserId, { ...receipt, reportId });
-    }
-    await Promise.all(pushRecipients.map((userId) => sendWebPushToUser(database, userId, {
-      title: `New report: ${title}`,
-      message: `${referenceCode} was submitted to ${category.name} and needs review.`,
-      reportId,
-    })));
-    const row = await loadReport(database, reportId);
-    const viewer = { id: reporterUserId ?? "", role: "RESIDENT" as const, organizationId: null };
+    });
+    await runStep(trace, "push-notifications", () =>
+      Promise.all(pushRecipients.map((userId) => sendWebPushToUser(database, userId, {
+        title: `New report: ${title}`,
+        message: `${referenceCode} was submitted to ${category.name} and needs review.`,
+        reportId,
+      }))),
+    );
+    trace.lastCompletedStep = "completed";
     return {
-      report: await serializeDetail(database, row, viewer),
+      report,
       ...(guestToken ? { guestAccessToken: guestToken } : {}),
     };
   }
@@ -1275,7 +1416,10 @@ export function createReportsRouter(deps: {
     upload.single("photo"),
     async (request, response) => {
       const guestAccessToken = randomBytes(32).toString("base64url");
-      const result = await submitReport(request, null, guestAccessToken);
+      const result = await submitReport(request, null, {
+        route: "POST /api/reports/guest",
+        guestToken: guestAccessToken,
+      });
       response.status(201).json({ ...result.report, guestAccessToken: result.guestAccessToken });
     },
   );
@@ -1288,7 +1432,7 @@ export function createReportsRouter(deps: {
     upload.single("photo"),
     async (request, response) => {
       const user = currentUser(request);
-      const result = await submitReport(request, user.id);
+      const result = await submitReport(request, user.id, { route: "POST /api/reports" });
       response.status(201).json(result.report);
     },
   );

@@ -377,13 +377,17 @@ export async function createPostgresDatabase(connectionString: string): Promise<
       // back, so it is safe to retry once on a fresh connection. Compensation
       // (onRollback) runs only after the final attempt fails.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const client = await pool.connect();
+        // Acquiring the pooled connection can fail transiently on a thawed
+        // serverless instance (dead pooler socket), so it belongs to the
+        // retried attempt rather than failing the transaction outright.
+        let client: PoolClient | undefined;
         let commitAttempted = false;
         let discardClient = false;
         let failure: unknown;
         let failed = false;
         let retryable = false;
         try {
+          client = await pool.connect();
           await client.query("BEGIN");
           const value = await inTransaction.run(client, fn);
           commitAttempted = true;
@@ -393,18 +397,20 @@ export async function createPostgresDatabase(connectionString: string): Promise<
           failed = true;
           failure = error;
           retryable = !commitAttempted && isConnectionError(error) && attempt === 0;
-          if (commitAttempted) {
-            // ROLLBACK after a lost COMMIT reply cannot prove the write was undone.
-            discardClient = true;
-          } else {
-            try {
-              await client.query("ROLLBACK");
-            } catch {
+          if (client) {
+            if (commitAttempted) {
+              // ROLLBACK after a lost COMMIT reply cannot prove the write was undone.
               discardClient = true;
+            } else {
+              try {
+                await client.query("ROLLBACK");
+              } catch {
+                discardClient = true;
+              }
             }
           }
         } finally {
-          client.release(discardClient);
+          client?.release(discardClient);
         }
         if (failed) {
           if (retryable) continue;
