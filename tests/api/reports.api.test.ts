@@ -629,4 +629,32 @@ describe("required photos, AI analysis, and configured category routing", () => 
     expect(rejected.body.error.code).toBe("IMAGE_NOT_ACCEPTED");
     expect((await residentAgent.get("/api/reports?scope=mine").expect(200)).body.reports).toHaveLength(0);
   });
+
+  it("confirms an account submission in the reporter's notifications without issuing a tracking link", async () => {
+    const { residentAgent, categories } = await scenario();
+    const roads = categoryByName(categories, "Roads and Sidewalks");
+    setTestPhotoAnalysis({
+      categoryId: roads.id,
+      title: "Pothole receipt check",
+      description: "A pothole is visible beside the crosswalk.",
+    });
+
+    const created = await residentAgent
+      .post("/api/reports")
+      .field("location", "Main Street and First Avenue")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
+      .expect(201);
+
+    expect(created.body.guestAccessToken).toBeUndefined();
+
+    const { body } = await residentAgent.get("/api/notifications").expect(200);
+    const receipt = body.notifications.find(
+      (notification: { type: string }) => notification.type === "REPORT_RECEIVED",
+    );
+    expect(receipt).toMatchObject({ reportId: created.body.id, read: false });
+    expect(receipt.title).toContain(created.body.referenceCode);
+    expect(receipt.message).toContain(created.body.organization.name);
+  });
 });

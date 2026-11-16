@@ -160,4 +160,49 @@ describe("guest reporting and secure follow-up", () => {
       .set("X-Guest-Access", "incorrect-token")
       .expect(404);
   });
+
+  it("refuses to issue a guest tracking link to a caller who already has a session", async () => {
+    const { app, database } = await testApplicationWithUploads();
+    const admin = await setupAdministrator(app);
+    const { body: catalog } = await request(app).get("/api/categories").expect(200);
+    const category = catalog.categories.find(
+      (entry: { name: string }) => entry.name === "Roads and Sidewalks",
+    );
+
+    setTestPhotoAnalysis({
+      categoryId: category.id,
+      title: "Rejected signed-in guest report",
+    });
+    const rejected = await admin
+      .post("/api/reports/guest")
+      .field("location", "Main Street")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), {
+        filename: "issue.png",
+        contentType: "image/png",
+      })
+      .expect(409);
+    expect(rejected.body.error.code).toBe("SIGNED_IN_ACCOUNT_REQUIRED");
+    expect(rejected.body.guestAccessToken).toBeUndefined();
+    expect(
+      (await database.prepare("SELECT COUNT(*) AS count FROM reports").get()) as { count: number },
+    ).toEqual({ count: 0 });
+
+    // A stale or unknown cookie is not a session, so a signed-out visitor can
+    // still report without an account.
+    setTestPhotoAnalysis({ categoryId: category.id, title: "Anonymous pothole" });
+    const created = await request(app)
+      .post("/api/reports/guest")
+      .set("Cookie", "civicsignal_session=expired-token")
+      .field("location", "Main Street")
+      .field("latitude", "39.7817")
+      .field("longitude", "-89.6501")
+      .attach("photo", Buffer.from(PNG_BASE64, "base64"), {
+        filename: "issue.png",
+        contentType: "image/png",
+      })
+      .expect(201);
+    expect(created.body.guestAccessToken).toMatch(/^[A-Za-z0-9_-]{40,60}$/);
+  });
 });

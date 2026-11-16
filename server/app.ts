@@ -33,16 +33,27 @@ import { createNotificationsRouter } from "./routes/notifications.js";
 import { createLocationRouter } from "./routes/location.js";
 import { createReportsRouter } from "./routes/reports.js";
 
+/**
+ * Parses an origin into its canonical form. URL normalizes hostname case and
+ * default ports (`https://example.com:443` becomes `https://example.com`), so
+ * a proxy or client that spells the same origin differently is not mistaken
+ * for a foreign site. Opaque and malformed values return undefined.
+ */
+function normalizedOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.origin === "null" ? undefined : url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
 function configuredOrigins(environment = process.env): Set<string> {
   const origins = new Set<string>();
   for (const value of (environment.APP_ORIGIN ?? "").split(",")) {
-    const trimmed = value.trim();
-    if (!trimmed) continue;
-    try {
-      origins.add(new URL(trimmed).origin);
-    } catch {
-      // Ignore malformed values; the request origin must still match this host.
-    }
+    const origin = normalizedOrigin(value.trim());
+    if (origin) origins.add(origin);
   }
   return origins;
 }
@@ -105,12 +116,21 @@ export function createApp(options: AppOptions) {
       return;
     }
     const forwardedHost = request.headers["x-forwarded-host"];
-    const host = typeof forwardedHost === "string" ? forwardedHost : request.headers.host;
+    // Proxy chains append to X-Forwarded-Host; the first value is the origin
+    // the browser actually addressed.
+    const host =
+      typeof forwardedHost === "string"
+        ? forwardedHost.split(",")[0]?.trim()
+        : request.headers.host;
     const forwardedProto = request.headers["x-forwarded-proto"];
     const protocol =
       typeof forwardedProto === "string" ? forwardedProto.split(",")[0].trim() : request.protocol;
-    const sameOrigin = host ? `${protocol}://${host}` : undefined;
-    if (origin === sameOrigin || allowedOrigins.has(origin)) {
+    const sameOrigin = normalizedOrigin(host ? `${protocol}://${host}` : undefined);
+    const requestOrigin = normalizedOrigin(origin);
+    if (
+      (sameOrigin && requestOrigin === sameOrigin) ||
+      (requestOrigin && allowedOrigins.has(requestOrigin))
+    ) {
       next();
       return;
     }

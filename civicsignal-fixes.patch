@@ -1,0 +1,337 @@
+diff --git a/index.html b/index.html
+index 50bb6f8..eb22715 100644
+--- a/index.html
++++ b/index.html
+@@ -11,7 +11,7 @@
+     <link rel="icon" href="/favicon.ico" sizes="any" />
+     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+     <link rel="apple-touch-icon" href="/icon-192.png" />
+-    <link rel="manifest" href="/manifest.webmanifest" />
++    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+     <title>CivicSignal</title>
+   </head>
+   <body>
+diff --git a/server/app.ts b/server/app.ts
+index 8ae6e7a..fe3e501 100644
+--- a/server/app.ts
++++ b/server/app.ts
+@@ -33,16 +33,27 @@ import { createNotificationsRouter } from "./routes/notifications.js";
+ import { createLocationRouter } from "./routes/location.js";
+ import { createReportsRouter } from "./routes/reports.js";
+ 
++/**
++ * Parses an origin into its canonical form. URL normalizes hostname case and
++ * default ports (`https://example.com:443` becomes `https://example.com`), so
++ * a proxy or client that spells the same origin differently is not mistaken
++ * for a foreign site. Opaque and malformed values return undefined.
++ */
++function normalizedOrigin(value: string | undefined): string | undefined {
++  if (!value) return undefined;
++  try {
++    const url = new URL(value);
++    return url.origin === "null" ? undefined : url.origin;
++  } catch {
++    return undefined;
++  }
++}
++
+ function configuredOrigins(environment = process.env): Set<string> {
+   const origins = new Set<string>();
+   for (const value of (environment.APP_ORIGIN ?? "").split(",")) {
+-    const trimmed = value.trim();
+-    if (!trimmed) continue;
+-    try {
+-      origins.add(new URL(trimmed).origin);
+-    } catch {
+-      // Ignore malformed values; the request origin must still match this host.
+-    }
++    const origin = normalizedOrigin(value.trim());
++    if (origin) origins.add(origin);
+   }
+   return origins;
+ }
+@@ -105,12 +116,21 @@ export function createApp(options: AppOptions) {
+       return;
+     }
+     const forwardedHost = request.headers["x-forwarded-host"];
+-    const host = typeof forwardedHost === "string" ? forwardedHost : request.headers.host;
++    // Proxy chains append to X-Forwarded-Host; the first value is the origin
++    // the browser actually addressed.
++    const host =
++      typeof forwardedHost === "string"
++        ? forwardedHost.split(",")[0]?.trim()
++        : request.headers.host;
+     const forwardedProto = request.headers["x-forwarded-proto"];
+     const protocol =
+       typeof forwardedProto === "string" ? forwardedProto.split(",")[0].trim() : request.protocol;
+-    const sameOrigin = host ? `${protocol}://${host}` : undefined;
+-    if (origin === sameOrigin || allowedOrigins.has(origin)) {
++    const sameOrigin = normalizedOrigin(host ? `${protocol}://${host}` : undefined);
++    const requestOrigin = normalizedOrigin(origin);
++    if (
++      (sameOrigin && requestOrigin === sameOrigin) ||
++      (requestOrigin && allowedOrigins.has(requestOrigin))
++    ) {
+       next();
+       return;
+     }
+diff --git a/server/routes/reports.ts b/server/routes/reports.ts
+index a827058..8d74144 100644
+--- a/server/routes/reports.ts
++++ b/server/routes/reports.ts
+@@ -36,7 +36,13 @@ import {
+ } from "../image-similarity.js";
+ import { sendWebPushToUser } from "../web-push.js";
+ import type { PhotoStore } from "../photo-store.js";
+-import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
++import {
++  authenticate,
++  currentUser,
++  requireRole,
++  requireStaff,
++  userForSessionToken,
++} from "../session.js";
+ 
+ const ALLOWED_IMAGE_TYPES = new Set([
+   "image/jpeg",
+@@ -516,6 +522,17 @@ async function nextReferenceCode(database: CivicDatabase): Promise<string> {
+   return `CS-${new Date().getFullYear()}-${value.padStart(4, "0")}`;
+ }
+ 
++function reporterReceiptText(
++  referenceCode: string,
++  organizationName: string,
++  assigneeName: string | null,
++): { title: string; message: string } {
++  return {
++    title: `Report received: ${referenceCode}`,
++    message: `${referenceCode} was sent to ${organizationName}${assigneeName ? ` and assigned to ${assigneeName}` : ""}. Follow its status and official updates in your account.`,
++  };
++}
++
+ async function notifyReporterOfReport(
+   database: CivicDatabase,
+   row: ReportRow,
+@@ -568,6 +585,34 @@ export function createReportsRouter(deps: {
+     message: { error: { code: "RATE_LIMITED", message: "You have sent several follow-up confirmations. Try again later." } },
+   });
+ 
++  // Guest reporting exists for people without an account. A caller who already
++  // has a valid session must use the account route so the report belongs to
++  // that account and updates arrive as notifications, not a bearer link.
++  async function rejectSignedInGuestSubmission(
++    request: import("express").Request,
++    _response: import("express").Response,
++    next: import("express").NextFunction,
++  ): Promise<void> {
++    const token = request.cookies?.[sessionCookie] as string | undefined;
++    if (!token) {
++      next();
++      return;
++    }
++    const user = await userForSessionToken(database, token);
++    if (!user) {
++      // An expired or unknown cookie is not a session; the caller is a guest.
++      next();
++      return;
++    }
++    next(
++      new ApiError(
++        409,
++        "SIGNED_IN_ACCOUNT_REQUIRED",
++        "You are signed in. Submit this report from your account so it appears in your report history.",
++      ),
++    );
++  }
++
+   // Photos are buffered and handed to the photo store only once accepted, so
+   // nothing is written for requests rejected by the file filter or size limit.
+   const upload = multer({
+@@ -758,6 +803,22 @@ export function createReportsRouter(deps: {
+           );
+       }
+ 
++      if (reporterUserId) {
++        const receipt = reporterReceiptText(
++          referenceCode,
++          routing.organizationName,
++          assignee?.displayName ?? null,
++        );
++        await createNotification(database, {
++          userId: reporterUserId,
++          reportId,
++          type: "REPORT_RECEIVED",
++          title: receipt.title,
++          message: receipt.message,
++          deferPush: true,
++        });
++      }
++
+       pushRecipients = await notifyOrganization(database, category.organization_id, {
+         reportId,
+         type: "REPORT_SUBMITTED",
+@@ -815,6 +876,14 @@ export function createReportsRouter(deps: {
+       }
+     });
+ 
++    if (reporterUserId) {
++      const receipt = reporterReceiptText(
++        referenceCode,
++        routing.organizationName,
++        assignee?.displayName ?? null,
++      );
++      await sendWebPushToUser(database, reporterUserId, { ...receipt, reportId });
++    }
+     await Promise.all(pushRecipients.map((userId) => sendWebPushToUser(database, userId, {
+       title: `New report: ${title}`,
+       message: `${referenceCode} was submitted to ${category.name} and needs review.`,
+@@ -1173,6 +1242,7 @@ export function createReportsRouter(deps: {
+ 
+   router.post(
+     "/guest",
++    rejectSignedInGuestSubmission,
+     reportCreationLimiter,
+     upload.single("photo"),
+     async (request, response) => {
+diff --git a/tests/api/auth.api.test.ts b/tests/api/auth.api.test.ts
+index 13f2522..bed6482 100644
+--- a/tests/api/auth.api.test.ts
++++ b/tests/api/auth.api.test.ts
+@@ -143,6 +143,26 @@ describe("authentication", () => {
+       .set("Origin", "http://civicsignal.example")
+       .send({ email: "admin@example.test", password: "correct horse battery staple" })
+       .expect(200);
++
++    // A proxy chain appends its own hop to X-Forwarded-*; the first value is
++    // the origin the browser addressed and must still be treated as same-site.
++    await request(app)
++      .post("/api/auth/login")
++      .set("X-Forwarded-Host", "civicsignal.example, proxy.internal")
++      .set("X-Forwarded-Proto", "https,http")
++      .set("Origin", "https://civicsignal.example")
++      .send({ email: "admin@example.test", password: "correct horse battery staple" })
++      .expect(200);
++
++    // Hostname case and a redundant default port are the same origin, not a
++    // cross-site request; proxies and clients may spell either differently.
++    await request(app)
++      .post("/api/auth/login")
++      .set("Host", "CIVICSIGNAL.EXAMPLE")
++      .set("X-Forwarded-Proto", "https")
++      .set("Origin", "https://civicsignal.example:443")
++      .send({ email: "admin@example.test", password: "correct horse battery staple" })
++      .expect(200);
+   });
+ 
+   it("revokes other sessions when the password changes", async () => {
+diff --git a/tests/api/guest-reports.api.test.ts b/tests/api/guest-reports.api.test.ts
+index 5105a0d..84bbf73 100644
+--- a/tests/api/guest-reports.api.test.ts
++++ b/tests/api/guest-reports.api.test.ts
+@@ -160,4 +160,49 @@ describe("guest reporting and secure follow-up", () => {
+       .set("X-Guest-Access", "incorrect-token")
+       .expect(404);
+   });
++
++  it("refuses to issue a guest tracking link to a caller who already has a session", async () => {
++    const { app, database } = await testApplicationWithUploads();
++    const admin = await setupAdministrator(app);
++    const { body: catalog } = await request(app).get("/api/categories").expect(200);
++    const category = catalog.categories.find(
++      (entry: { name: string }) => entry.name === "Roads and Sidewalks",
++    );
++
++    setTestPhotoAnalysis({
++      categoryId: category.id,
++      title: "Rejected signed-in guest report",
++    });
++    const rejected = await admin
++      .post("/api/reports/guest")
++      .field("location", "Main Street")
++      .field("latitude", "39.7817")
++      .field("longitude", "-89.6501")
++      .attach("photo", Buffer.from(PNG_BASE64, "base64"), {
++        filename: "issue.png",
++        contentType: "image/png",
++      })
++      .expect(409);
++    expect(rejected.body.error.code).toBe("SIGNED_IN_ACCOUNT_REQUIRED");
++    expect(rejected.body.guestAccessToken).toBeUndefined();
++    expect(
++      (await database.prepare("SELECT COUNT(*) AS count FROM reports").get()) as { count: number },
++    ).toEqual({ count: 0 });
++
++    // A stale or unknown cookie is not a session, so a signed-out visitor can
++    // still report without an account.
++    setTestPhotoAnalysis({ categoryId: category.id, title: "Anonymous pothole" });
++    const created = await request(app)
++      .post("/api/reports/guest")
++      .set("Cookie", "civicsignal_session=expired-token")
++      .field("location", "Main Street")
++      .field("latitude", "39.7817")
++      .field("longitude", "-89.6501")
++      .attach("photo", Buffer.from(PNG_BASE64, "base64"), {
++        filename: "issue.png",
++        contentType: "image/png",
++      })
++      .expect(201);
++    expect(created.body.guestAccessToken).toMatch(/^[A-Za-z0-9_-]{40,60}$/);
++  });
+ });
+diff --git a/tests/api/reports.api.test.ts b/tests/api/reports.api.test.ts
+index e007835..7245ca7 100644
+--- a/tests/api/reports.api.test.ts
++++ b/tests/api/reports.api.test.ts
+@@ -629,4 +629,32 @@ describe("required photos, AI analysis, and configured category routing", () =>
+     expect(rejected.body.error.code).toBe("IMAGE_NOT_ACCEPTED");
+     expect((await residentAgent.get("/api/reports?scope=mine").expect(200)).body.reports).toHaveLength(0);
+   });
++
++  it("confirms an account submission in the reporter's notifications without issuing a tracking link", async () => {
++    const { residentAgent, categories } = await scenario();
++    const roads = categoryByName(categories, "Roads and Sidewalks");
++    setTestPhotoAnalysis({
++      categoryId: roads.id,
++      title: "Pothole receipt check",
++      description: "A pothole is visible beside the crosswalk.",
++    });
++
++    const created = await residentAgent
++      .post("/api/reports")
++      .field("location", "Main Street and First Avenue")
++      .field("latitude", "39.7817")
++      .field("longitude", "-89.6501")
++      .attach("photo", Buffer.from(PNG_BASE64, "base64"), { filename: "issue.png", contentType: "image/png" })
++      .expect(201);
++
++    expect(created.body.guestAccessToken).toBeUndefined();
++
++    const { body } = await residentAgent.get("/api/notifications").expect(200);
++    const receipt = body.notifications.find(
++      (notification: { type: string }) => notification.type === "REPORT_RECEIVED",
++    );
++    expect(receipt).toMatchObject({ reportId: created.body.id, read: false });
++    expect(receipt.title).toContain(created.body.referenceCode);
++    expect(receipt.message).toContain(created.body.organization.name);
++  });
+ });
+diff --git a/vite.config.ts b/vite.config.ts
+index 633b4e9..63ca036 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -10,7 +10,14 @@ export default defineConfig({
+   server: {
+     port: 5173,
+     proxy: {
+-      "/api": "http://localhost:3001",
++      "/api": {
++        target: "http://localhost:3001",
++        // The API rejects unsafe requests whose Origin does not match the
++        // request host. Without these headers the proxy's target (3001) looks
++        // like a different site from the dev origin (5173), so every sign-in,
++        // sign-up, and form submission would fail with CROSS_ORIGIN_REQUEST.
++        xfwd: true,
++      },
+     },
+   },
+   test: {

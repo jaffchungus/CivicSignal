@@ -38,7 +38,13 @@ import {
 } from "../image-similarity.js";
 import { sendWebPushToUser } from "../web-push.js";
 import type { PhotoStore } from "../photo-store.js";
-import { authenticate, currentUser, requireRole, requireStaff } from "../session.js";
+import {
+  authenticate,
+  currentUser,
+  requireRole,
+  requireStaff,
+  userForSessionToken,
+} from "../session.js";
 
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/jpeg",
@@ -524,6 +530,17 @@ async function nextReferenceCode(database: CivicDatabase): Promise<string> {
   return `CS-${new Date().getFullYear()}-${value.padStart(4, "0")}`;
 }
 
+function reporterReceiptText(
+  referenceCode: string,
+  organizationName: string,
+  assigneeName: string | null,
+): { title: string; message: string } {
+  return {
+    title: `Report received: ${referenceCode}`,
+    message: `${referenceCode} was sent to ${organizationName}${assigneeName ? ` and assigned to ${assigneeName}` : ""}. Follow its status and official updates in your account.`,
+  };
+}
+
 async function notifyReporterOfReport(
   database: CivicDatabase,
   row: ReportRow,
@@ -575,6 +592,34 @@ export function createReportsRouter(deps: {
     legacyHeaders: false,
     message: { error: { code: "RATE_LIMITED", message: "You have sent several follow-up confirmations. Try again later." } },
   });
+
+  // Guest reporting exists for people without an account. A caller who already
+  // has a valid session must use the account route so the report belongs to
+  // that account and updates arrive as notifications, not a bearer link.
+  async function rejectSignedInGuestSubmission(
+    request: import("express").Request,
+    _response: import("express").Response,
+    next: import("express").NextFunction,
+  ): Promise<void> {
+    const token = request.cookies?.[sessionCookie] as string | undefined;
+    if (!token) {
+      next();
+      return;
+    }
+    const user = await userForSessionToken(database, token);
+    if (!user) {
+      // An expired or unknown cookie is not a session; the caller is a guest.
+      next();
+      return;
+    }
+    next(
+      new ApiError(
+        409,
+        "SIGNED_IN_ACCOUNT_REQUIRED",
+        "You are signed in. Submit this report from your account so it appears in your report history.",
+      ),
+    );
+  }
 
   // Photos are buffered and handed to the photo store only once accepted, so
   // nothing is written for requests rejected by the file filter or size limit.
@@ -766,6 +811,22 @@ export function createReportsRouter(deps: {
           );
       }
 
+      if (reporterUserId) {
+        const receipt = reporterReceiptText(
+          referenceCode,
+          routing.organizationName,
+          assignee?.displayName ?? null,
+        );
+        await createNotification(database, {
+          userId: reporterUserId,
+          reportId,
+          type: "REPORT_RECEIVED",
+          title: receipt.title,
+          message: receipt.message,
+          deferPush: true,
+        });
+      }
+
       pushRecipients = await notifyOrganization(database, category.organization_id, {
         reportId,
         type: "REPORT_SUBMITTED",
@@ -823,6 +884,14 @@ export function createReportsRouter(deps: {
       }
     });
 
+    if (reporterUserId) {
+      const receipt = reporterReceiptText(
+        referenceCode,
+        routing.organizationName,
+        assignee?.displayName ?? null,
+      );
+      await sendWebPushToUser(database, reporterUserId, { ...receipt, reportId });
+    }
     await Promise.all(pushRecipients.map((userId) => sendWebPushToUser(database, userId, {
       title: `New report: ${title}`,
       message: `${referenceCode} was submitted to ${category.name} and needs review.`,
@@ -1191,6 +1260,7 @@ export function createReportsRouter(deps: {
 
   router.post(
     "/guest",
+    rejectSignedInGuestSubmission,
     reportCreationLimiter,
     upload.single("photo"),
     async (request, response) => {

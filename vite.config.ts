@@ -10,7 +10,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:3001",
+      "/api": {
+        target: "http://localhost:3001",
+        // The API rejects unsafe requests whose Origin does not match the
+        // request host. Without these headers the proxy's target (3001) looks
+        // like a different site from the dev origin (5173), so every sign-in,
+        // sign-up, and form submission would fail with CROSS_ORIGIN_REQUEST.
+        xfwd: true,
+      },
     },
   },
   test: {

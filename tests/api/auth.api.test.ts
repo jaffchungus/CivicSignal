@@ -143,6 +143,26 @@ describe("authentication", () => {
       .set("Origin", "http://civicsignal.example")
       .send({ email: "admin@example.test", password: "correct horse battery staple" })
       .expect(200);
+
+    // A proxy chain appends its own hop to X-Forwarded-*; the first value is
+    // the origin the browser addressed and must still be treated as same-site.
+    await request(app)
+      .post("/api/auth/login")
+      .set("X-Forwarded-Host", "civicsignal.example, proxy.internal")
+      .set("X-Forwarded-Proto", "https,http")
+      .set("Origin", "https://civicsignal.example")
+      .send({ email: "admin@example.test", password: "correct horse battery staple" })
+      .expect(200);
+
+    // Hostname case and a redundant default port are the same origin, not a
+    // cross-site request; proxies and clients may spell either differently.
+    await request(app)
+      .post("/api/auth/login")
+      .set("Host", "CIVICSIGNAL.EXAMPLE")
+      .set("X-Forwarded-Proto", "https")
+      .set("Origin", "https://civicsignal.example:443")
+      .send({ email: "admin@example.test", password: "correct horse battery staple" })
+      .expect(200);
   });
 
   it("revokes other sessions when the password changes", async () => {
