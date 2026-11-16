@@ -78,9 +78,12 @@ export function createApp(options: AppOptions) {
   const app = express();
 
   app.disable("x-powered-by");
-  // Behind a platform proxy (Vercel) trust the first hop so secure cookies
-  // and the rate limiter see the real client over x-forwarded-*.
-  if (process.env.VERCEL) {
+  // Behind a proxy (Vercel in production, Vite's dev proxy locally) trust the
+  // first hop so secure cookies and the rate limiter see the real client over
+  // x-forwarded-*. Without this, express-rate-limit rejects the Vite proxy's
+  // X-Forwarded-For header with ERR_ERL_UNEXPECTED_X_FORWARDED_FOR, which turns
+  // rate-limited requests such as sign-in into a generic 500.
+  if (process.env.VERCEL || !secureCookies) {
     app.set("trust proxy", 1);
   }
   // HTTPS deployments get HSTS and upgrade-insecure-requests; plain-HTTP local
