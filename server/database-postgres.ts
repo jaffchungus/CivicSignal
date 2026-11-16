@@ -253,9 +253,46 @@ const DATA_API_PROTECTION = `
   $civicsignal$;
 `;
 
+const CONNECTION_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+const CONNECTION_ERROR_MESSAGES = [
+  "connection terminated",
+  "connection ended",
+  "server closed the connection",
+  "connection is closed",
+  "client has encountered a connection error",
+  "timeout exceeded when trying to connect",
+  "terminating connection",
+];
+
+/** True for transient transport failures worth retrying once on a fresh connection. */
+function isConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && CONNECTION_ERROR_CODES.has(code)) return true;
+  const message = error.message.toLowerCase();
+  return CONNECTION_ERROR_MESSAGES.some((fragment) => message.includes(fragment));
+}
+
 export async function createPostgresDatabase(connectionString: string): Promise<CivicDatabase> {
   // No named prepared statements: compatible with Supabase transaction pooling.
-  const pool = new Pool({ connectionString, max: 1, connectionTimeoutMillis: 10_000 });
+  // keepAlive lets the socket detect a dead connection instead of handing out
+  // a silently-stale client after the serverless instance thaws.
+  const pool = new Pool({
+    connectionString,
+    max: 1,
+    connectionTimeoutMillis: 10_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+  });
   // A transaction context belongs to this database, never another adapter instance.
   const inTransaction = new AsyncLocalStorage<PoolClient>();
 
@@ -297,21 +334,36 @@ export async function createPostgresDatabase(connectionString: string): Promise<
 
   const statement = (sql: string): CivicStatement => {
     const text = toNumberedParameters(sql);
+    // The cached single connection can go stale while a serverless instance is
+    // frozen. Retry once on a fresh connection for transient transport errors.
+    // Statements inside a transaction use its dedicated client and are retried
+    // by the transaction itself, so they are not retried here.
+    const execute = async <T>(operation: () => Promise<T>): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (inTransaction.getStore() || !isConnectionError(error)) throw error;
+        return operation();
+      }
+    };
     return {
-      async get(...parameters) {
-        const client = inTransaction.getStore() ?? pool;
-        const result = await client.query(text, parameters as unknown[]);
-        return result.rows[0];
-      },
-      async all(...parameters) {
-        const client = inTransaction.getStore() ?? pool;
-        const result = await client.query(text, parameters as unknown[]);
-        return result.rows;
-      },
-      async run(...parameters) {
-        const client = inTransaction.getStore() ?? pool;
-        await client.query(text, parameters as unknown[]);
-      },
+      get: (...parameters) =>
+        execute(async () => {
+          const client = inTransaction.getStore() ?? pool;
+          const result = await client.query(text, parameters as unknown[]);
+          return result.rows[0];
+        }),
+      all: (...parameters) =>
+        execute(async () => {
+          const client = inTransaction.getStore() ?? pool;
+          const result = await client.query(text, parameters as unknown[]);
+          return result.rows;
+        }),
+      run: (...parameters) =>
+        execute(async () => {
+          const client = inTransaction.getStore() ?? pool;
+          await client.query(text, parameters as unknown[]);
+        }),
     };
   };
 
@@ -321,25 +373,41 @@ export async function createPostgresDatabase(connectionString: string): Promise<
       if (inTransaction.getStore()) {
         return fn();
       }
-      const client = await pool.connect();
-      let commitAttempted = false;
-      let discardClient = false;
-      try {
-        await client.query("BEGIN");
-        const value = await inTransaction.run(client, fn);
-        commitAttempted = true;
-        await client.query("COMMIT");
-        return value;
-      } catch (error) {
-        if (commitAttempted) {
-          // ROLLBACK after a lost COMMIT reply cannot prove the write was undone.
-          discardClient = true;
-        } else {
-          try {
-            await client.query("ROLLBACK");
-          } catch {
+      // A connection dropped before COMMIT leaves the transaction fully rolled
+      // back, so it is safe to retry once on a fresh connection. Compensation
+      // (onRollback) runs only after the final attempt fails.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const client = await pool.connect();
+        let commitAttempted = false;
+        let discardClient = false;
+        let failure: unknown;
+        let failed = false;
+        let retryable = false;
+        try {
+          await client.query("BEGIN");
+          const value = await inTransaction.run(client, fn);
+          commitAttempted = true;
+          await client.query("COMMIT");
+          return value;
+        } catch (error) {
+          failed = true;
+          failure = error;
+          retryable = !commitAttempted && isConnectionError(error) && attempt === 0;
+          if (commitAttempted) {
+            // ROLLBACK after a lost COMMIT reply cannot prove the write was undone.
             discardClient = true;
+          } else {
+            try {
+              await client.query("ROLLBACK");
+            } catch {
+              discardClient = true;
+            }
           }
+        } finally {
+          client.release(discardClient);
+        }
+        if (failed) {
+          if (retryable) continue;
           if (!discardClient) {
             try {
               await onRollback?.();
@@ -347,11 +415,11 @@ export async function createPostgresDatabase(connectionString: string): Promise<
               // Compensation cannot replace the original transaction error.
             }
           }
+          throw failure;
         }
-        throw error;
-      } finally {
-        client.release(discardClient);
       }
+      // Unreachable: the loop either returns or throws.
+      throw new Error("Transaction did not complete.");
     },
     async close() {
       await pool.end();
