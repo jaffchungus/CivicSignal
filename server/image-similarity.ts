@@ -118,8 +118,17 @@ export async function findSimilarReports(
       continue; // Too far away
     }
 
-    // Parse the embedding from the buffer
-    const existingEmbedding = parseEmbedding(report.image_embedding);
+    // Parse the embedding from the buffer. Corrupt or differently-sized
+    // embeddings are skipped rather than failing the whole report submission.
+    let existingEmbedding: ImageEmbedding;
+    try {
+      existingEmbedding = parseEmbedding(report.image_embedding);
+    } catch {
+      continue;
+    }
+    if (existingEmbedding.length !== newReportEmbedding.length) {
+      continue;
+    }
 
     // Calculate similarity
     const distance = embeddingDistance(newReportEmbedding, existingEmbedding);

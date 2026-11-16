@@ -446,13 +446,18 @@ async function serializeDetail(
   const canReadStaffNotes = user.role === "ADMIN" || staffScope;
   const internalAssignmentActions = new Set(["REPORT_HANDED_OFF", "REPORT_TRANSFERRED"]);
 
-  // Check if this is a persistent problem
+  // Check if this is a persistent problem. This is non-essential enrichment;
+  // a failure here must not fail the report response.
   let isPersistentProblem = false;
   let relatedReportCount = 0;
   if (row.similar_report_id) {
-    const persistenceCheck = await detectPersistentProblem(database, row.id);
-    isPersistentProblem = persistenceCheck.isPersistent;
-    relatedReportCount = persistenceCheck.relatedReportCount;
+    try {
+      const persistenceCheck = await detectPersistentProblem(database, row.id);
+      isPersistentProblem = persistenceCheck.isPersistent;
+      relatedReportCount = persistenceCheck.relatedReportCount;
+    } catch {
+      // Keep the report visible even when the similarity chain cannot be read.
+    }
   }
 
   const canViewPriority = isStaffRole(user.role) || user.role === "ADMIN";
@@ -846,32 +851,37 @@ export function createReportsRouter(deps: {
         pushRecipients.push(assignee.id);
       }
 
-      // Check if this is a persistent problem and notify appropriate staff
+      // Check if this is a persistent problem and notify appropriate staff.
+      // Detection is best-effort; a failure must not roll back the report.
       if (similarReport) {
-        const persistenceCheck = await detectPersistentProblem(database, reportId);
-        if (persistenceCheck.isPersistent) {
-          // Notify the staff who handled the original similar report
-          const originalReport = (await database
-            .prepare(
-              `SELECT assigned_user_id, reporter_user_id
-               FROM reports
-               WHERE id = ?`,
-            )
-            .get(similarReport.similarReportId)) as
-            | { assigned_user_id: string | null; reporter_user_id: string | null }
-            | undefined;
+        try {
+          const persistenceCheck = await detectPersistentProblem(database, reportId);
+          if (persistenceCheck.isPersistent) {
+            // Notify the staff who handled the original similar report
+            const originalReport = (await database
+              .prepare(
+                `SELECT assigned_user_id, reporter_user_id
+                 FROM reports
+                 WHERE id = ?`,
+              )
+              .get(similarReport.similarReportId)) as
+              | { assigned_user_id: string | null; reporter_user_id: string | null }
+              | undefined;
 
-          if (originalReport?.assigned_user_id) {
-            await createNotification(database, {
-              userId: originalReport.assigned_user_id,
-              reportId,
-              type: "PERSISTENT_PROBLEM",
-              title: `Persistent problem detected: ${referenceCode}`,
-              message: `This report appears to be a repeat of a similar issue you previously handled. ${persistenceCheck.relatedReportCount} related reports have been submitted for this location and category.`,
-              deferPush: true,
-            });
-            pushRecipients.push(originalReport.assigned_user_id);
+            if (originalReport?.assigned_user_id) {
+              await createNotification(database, {
+                userId: originalReport.assigned_user_id,
+                reportId,
+                type: "PERSISTENT_PROBLEM",
+                title: `Persistent problem detected: ${referenceCode}`,
+                message: `This report appears to be a repeat of a similar issue you previously handled. ${persistenceCheck.relatedReportCount} related reports have been submitted for this location and category.`,
+                deferPush: true,
+              });
+              pushRecipients.push(originalReport.assigned_user_id);
+            }
           }
+        } catch {
+          // Persistent-problem detection is optional; never fail the report.
         }
       }
     }, async () => {

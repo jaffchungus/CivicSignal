@@ -230,20 +230,29 @@ export async function sendWebPushToUser(
   userId: string,
   notification: { title: string; message: string; reportId: string | null },
 ): Promise<void> {
-  const subscriptions = (await database.prepare(
-    "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
-  ).all(userId)) as StoredSubscription[];
-  if (subscriptions.length === 0) return;
-  const keys = await loadVapidKeys(database);
-  if (!keys) return;
+  // Push delivery is best-effort. A database, VAPID, or provider failure must
+  // never fail the report submission or notification write that triggered it.
+  try {
+    const subscriptions = (await database.prepare(
+      "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
+    ).all(userId)) as StoredSubscription[];
+    if (subscriptions.length === 0) return;
+    const keys = await loadVapidKeys(database);
+    if (!keys) return;
 
-  const payload = Buffer.from(JSON.stringify({
-    title: notification.title,
-    body: notification.message,
-    url: notification.reportId ? `/reports/${encodeURIComponent(notification.reportId)}` : "/notifications",
-    tag: notification.reportId ? `report-${notification.reportId}` : `notification-${randomUUID()}`,
-  }));
-  await Promise.all(subscriptions.map((subscription) =>
-    sendToSubscription(database, keys, subscription, payload),
-  ));
+    const payload = Buffer.from(JSON.stringify({
+      title: notification.title,
+      body: notification.message,
+      url: notification.reportId ? `/reports/${encodeURIComponent(notification.reportId)}` : "/notifications",
+      tag: notification.reportId ? `report-${notification.reportId}` : `notification-${randomUUID()}`,
+    }));
+    await Promise.all(subscriptions.map((subscription) =>
+      sendToSubscription(database, keys, subscription, payload),
+    ));
+  } catch (error) {
+    console.warn(
+      "Web Push delivery could not be completed.",
+      error instanceof Error ? error.message : "Unknown error",
+    );
+  }
 }
