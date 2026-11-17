@@ -224,6 +224,9 @@ export async function assignNearestStaff(
     fallbackOrganizationId: string;
   },
 ): Promise<AssigneeCandidate | null> {
+  // The CAST gives the first parameter a type. Postgres cannot infer one from a
+  // bare `$1 IS NOT NULL` and rejects the statement with 42P18 ("could not
+  // determine data type of parameter $1"), which SQLite silently accepts.
   const rows = (await database
     .prepare(
       `SELECT users.id, users.display_name, users.created_at,
@@ -238,7 +241,7 @@ export async function assignNearestStaff(
        WHERE users.status = 'ACTIVE'
          AND users.verified_at IS NOT NULL
          AND users.role IN ('OFFICIAL', 'LAW_ENFORCEMENT')
-         AND (? IS NOT NULL OR users.organization_id = ?)`,
+         AND (CAST(? AS TEXT) IS NOT NULL OR users.organization_id = ?)`,
     )
     .all(input.reportMunicipalityId, input.fallbackOrganizationId)) as Array<{
     id: string;
